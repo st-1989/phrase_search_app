@@ -13,10 +13,10 @@ st.set_page_config(page_title="Japanese Phrase Search", layout="wide")
 CSS = r"""
 <style>
 :root {
-  --text: #111111;
+  --text: inherit;
   --muted: #a0a0a0;
-  --border: #e6e6e6;
-  --subtle: #6f6f6f;
+  --border: rgba(128, 128, 128, 0.25);
+  --subtle: #8a8a8a;
 }
 
 .block-container {
@@ -32,20 +32,13 @@ CSS = r"""
 }
 
 .result-card {
-  padding: 0.95rem 0.1rem 1.0rem 0.1rem;
+  padding: 0.4rem 0.1rem;
   border-bottom: 1px solid var(--border);
 }
 
-.result-id {
-  color: var(--subtle);
-  font-size: 0.80rem;
-  margin-bottom: 0.35rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-
 .result-text {
-  font-size: 1.05rem;
-  line-height: 1.85;
+  font-size: 1.0rem;
+  line-height: 1.55;
   word-break: break-word;
 }
 
@@ -61,13 +54,54 @@ CSS = r"""
 .ellipsis {
   color: var(--muted);
 }
+
+details.result-card > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+details.result-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.result-card > summary:hover .context {
+  color: #808080;
+}
+
+.full-text {
+  margin-top: 0.4rem;
+  padding: 0.5rem 0.8rem;
+  background: rgba(128, 128, 128, 0.08);
+  border-left: 3px solid var(--border);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  word-break: break-word;
+}
 </style>
 """
 
 st.markdown(CSS, unsafe_allow_html=True)
 
 
-@st.cache_data(show_spinner=False)
+APP_DIR = Path(__file__).parent
+DATA_DIRS = [APP_DIR, APP_DIR / "data"]
+UPLOAD_OPTION = "CSVをアップロード…"
+
+
+def list_local_csvs() -> list[Path]:
+    paths = []
+    for data_dir in DATA_DIRS:
+        if data_dir.is_dir():
+            paths.extend(sorted(data_dir.glob("*.csv")))
+    return paths
+
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def load_local_csv(path: str, mtime: float) -> pd.DataFrame:
+    return load_csv(Path(path).read_bytes(), Path(path).name)
+
+
+@st.cache_data(show_spinner=False, max_entries=20)
 def load_csv(file_bytes: bytes, filename: str) -> pd.DataFrame:
     encodings = ["utf-8-sig", "utf-8", "cp932", "shift_jis"]
     last_error = None
@@ -153,6 +187,19 @@ def build_snippet(text: str, spans: list[tuple[int, int]], context_chars: int = 
     return "".join(parts)
 
 
+def build_full_text(text: str, spans: list[tuple[int, int]]) -> str:
+    parts = []
+    cursor = 0
+    for start, end in merge_spans(spans):
+        if start > cursor:
+            parts.append(f'<span class="context">{html.escape(text[cursor:start])}</span>')
+        parts.append(f'<span class="match">{html.escape(text[start:end])}</span>')
+        cursor = end
+    if cursor < len(text):
+        parts.append(f'<span class="context">{html.escape(text[cursor:])}</span>')
+    return "".join(parts)
+
+
 def exact_search(
     df: pd.DataFrame,
     text_column: str,
@@ -190,14 +237,20 @@ def exact_search(
 st.title("Japanese Phrase Search")
 st.caption("CSV内の文章から、入力した日本語フレーズの完全一致をリアルタイム検索します。")
 
-uploaded = st.file_uploader("CSVファイル", type=["csv"])
-
-if uploaded is None:
-    st.info("CSVファイルをアップロードしてください。")
-    st.stop()
+local_csvs = list_local_csvs()
+dataset_labels = {str(path.relative_to(APP_DIR)): path for path in local_csvs}
+dataset = st.selectbox("データセット", list(dataset_labels) + [UPLOAD_OPTION])
 
 try:
-    df = load_csv(uploaded.getvalue(), uploaded.name)
+    if dataset == UPLOAD_OPTION:
+        uploaded = st.file_uploader("CSVファイル", type=["csv"])
+        if uploaded is None:
+            st.info("CSVファイルをアップロードしてください。")
+            st.stop()
+        df = load_csv(uploaded.getvalue(), uploaded.name)
+    else:
+        path = dataset_labels[dataset]
+        df = load_local_csv(str(path), path.stat().st_mtime)
 except Exception as exc:
     st.error(str(exc))
     st.stop()
@@ -217,57 +270,63 @@ if not string_like_columns:
 
 with st.sidebar:
     st.header("設定")
-    text_column = st.selectbox("検索対象の列", string_like_columns)
-    id_candidates = ["(行番号を使う)"] + list(df.columns)
-    id_column = st.selectbox("表示用ID列", id_candidates)
+    default_text_column = max(
+        string_like_columns,
+        key=lambda col: df[col].fillna("").astype(str).str.len().mean(),
+    )
+    text_column = st.selectbox(
+        "検索対象の列",
+        string_like_columns,
+        index=string_like_columns.index(default_text_column),
+    )
     context_chars = st.slider("前後の表示文字数", 10, 120, 45, 5)
     max_results = st.slider("最大表示件数", 10, 500, 100, 10)
 
-query = st.text_input(
-    "検索フレーズ",
-    placeholder="例: 機械学習を用いて",
-    help="入力中の文字列を、そのまま完全一致で検索します。",
-)
 
-if not query:
-    st.write(f"**{len(df):,} 行**を読み込みました。検索語を入力してください。")
-    st.stop()
+@st.fragment
+def search_section(df: pd.DataFrame) -> None:
+    query = st.text_input(
+        "検索フレーズ",
+        placeholder="例: 機械学習を用いて",
+        help="入力中の文字列を、そのまま完全一致で検索します。",
+        live=True,
+    )
 
-results = exact_search(
-    df=df,
-    text_column=text_column,
-    query=query,
-    max_results=max_results,
-    context_chars=context_chars,
-)
+    if not query:
+        st.write(f"**{len(df):,} 行**を読み込みました。検索語を入力してください。")
+        return
 
-st.markdown(
-    f'<div class="search-meta">完全一致: {len(results):,} 件表示 / 最大 {max_results:,} 件</div>',
-    unsafe_allow_html=True,
-)
-
-if not results:
-    st.info("完全一致する句は見つかりませんでした。")
-    st.stop()
-
-for result in results:
-    row_idx = result["row_idx"]
-
-    if id_column == "(行番号を使う)":
-        display_id = f"row {row_idx}"
-    else:
-        value = df.at[row_idx, id_column]
-        display_id = str(value) if not pd.isna(value) else f"row {row_idx}"
+    results = exact_search(
+        df=df,
+        text_column=text_column,
+        query=query,
+        max_results=max_results,
+        context_chars=context_chars,
+    )
 
     st.markdown(
-        f"""
-        <div class="result-card">
-          <div class="result-id">{html.escape(display_id)} · {result['count']} match(es)</div>
-          <div class="result-text">{result['snippet']}</div>
-        </div>
-        """,
+        f'<div class="search-meta">完全一致: {len(results):,} 件表示 / 最大 {max_results:,} 件 · 文章をクリックで全文表示</div>',
         unsafe_allow_html=True,
     )
 
-    with st.expander("全文を表示"):
-        st.write(result["text"])
+    if not results:
+        st.info("完全一致する句は見つかりませんでした。")
+        return
+
+    cards = []
+    for result in results:
+        cards.append(
+            f"""
+            <details class="result-card">
+              <summary>
+                <div class="result-text">{result['snippet']}</div>
+              </summary>
+              <div class="full-text">{build_full_text(result['text'], result['spans'])}</div>
+            </details>
+            """
+        )
+
+    st.html("".join(cards))
+
+
+search_section(df)
