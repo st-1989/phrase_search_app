@@ -507,7 +507,7 @@ def search_section(df: pd.DataFrame, dataset: str, user: str | None) -> None:
     live_kwargs = {"live": True} if "live" in inspect.signature(st.text_input).parameters else {}
     query = st.text_input(
         "検索フレーズ",
-        placeholder="例: 機械学習を用いて",
+        placeholder="例: 比較的強い",
         help="入力中の文字列を、そのまま完全一致で検索します。",
         key="query",
         **live_kwargs,
