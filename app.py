@@ -3,10 +3,13 @@ import inspect
 import io
 import json
 import re
+from collections import Counter
 import unicodedata
 from datetime import datetime
 from pathlib import Path
 
+import altair as alt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -24,14 +27,14 @@ CSS = r"""
 }
 
 .block-container {
-  max-width: 1100px;
+  max-width: 1200px;
   padding-top: 2rem;
   padding-bottom: 4rem;
 }
 
 .search-meta {
   color: var(--subtle);
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   margin: 0.2rem 0 0.8rem 0;
 }
 
@@ -41,8 +44,8 @@ CSS = r"""
 }
 
 .result-text {
-  font-size: 1.0rem;
-  line-height: 1.55;
+  font-size: 1.05rem;
+  line-height: 1.65;
   word-break: break-word;
 }
 
@@ -74,7 +77,7 @@ details.result-card > summary:hover .context {
 
 .meta {
   color: var(--subtle);
-  font-size: 0.82rem;
+  font-size: 0.88rem;
   margin-bottom: 0.15rem;
 }
 
@@ -88,14 +91,13 @@ details.result-card > summary:hover .context {
   padding: 0.5rem 0.8rem;
   background: rgba(128, 128, 128, 0.08);
   border-left: 3px solid var(--border);
-  font-size: 0.95rem;
-  line-height: 1.6;
+  font-size: 1rem;
+  line-height: 1.7;
   word-break: break-word;
 }
 </style>
 """
 
-st.markdown(CSS, unsafe_allow_html=True)
 
 
 APP_DIR = Path(__file__).parent
@@ -363,19 +365,21 @@ def meta_html(row: pd.Series) -> str:
     return " · ".join(f"{label} {val}".strip() for label, val in items if val and val != "<b></b>")
 
 
+def find_hits(df: pd.DataFrame, text_column: str, query: str) -> np.ndarray:
+    """全行を一括（ベクトル化）で完全一致判定した真偽配列。"""
+    return df[text_column].str.contains(query, regex=False, na=False).to_numpy()
+
+
 def exact_search(
     df: pd.DataFrame,
+    hit: np.ndarray,
     text_column: str,
     query: str,
     max_results: int,
     context_chars: int,
-) -> tuple[list[dict], int]:
-    """完全一致検索。まず全行を一括（ベクトル化）で判定し、ヒットした上位 max_results 件だけ
-    Python でスパン計算・HTML 化する。戻り値は (表示用の結果, 全ヒット件数)。"""
-    hit = df[text_column].str.contains(query, regex=False, na=False).to_numpy()
-    total = int(hit.sum())
+) -> list[dict]:
+    """ヒットした上位 max_results 件だけ Python でスパン計算・HTML 化する。"""
     subset = df[hit].head(max_results)
-
     results = []
     for pos in range(len(subset)):
         row = subset.iloc[pos]
@@ -392,8 +396,300 @@ def exact_search(
                 "count": len(spans),
             }
         )
-    return results, total
+    return results
 
+
+# ---- 集計・共起語分析 ----
+RATING_COLUMN = "発行体格付(業務)"
+RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
+                "BB+", "BB", "BB-", "B+", "B", "B-", "CCC", "CC", "C", "D"]
+GROUP_COLUMNS = [RATING_COLUMN, "格付の方向性(業務)", "格付アクション(業務)", "業種(業務)", YEAR_COLUMN]
+TOKENIZER_FAST = "高速（文字種で分割）"
+TOKENIZER_JANOME = "形態素解析（Janome・名詞）"
+RANK_BY_SCORE = "特徴度（一致文書で特に多い語）"
+RANK_BY_COUNT = "出現文書数"
+
+_RATING_SYMBOL = re.compile(r"(?:AAA|AA|A|BBB|BB|B|CCC|CC|C|D)[+-]?")
+_RUN_PATTERN = re.compile(r"[一-龥々〆]{2,}|[ァ-ヴー]{2,}|[A-Za-z][A-Za-z&/\-]+")
+try:
+    from janome.tokenizer import Tokenizer as _JanomeTokenizer
+except ImportError:
+    _JanomeTokenizer = None
+
+
+@st.cache_resource(show_spinner=False)
+def _token_memo() -> dict:
+    """文書ごとの語の集合を覚えておく（同じ文書を再解析しない）。"""
+    return {}
+
+
+@st.cache_resource(show_spinner=False)
+def _janome():
+    return _JanomeTokenizer()
+
+
+def _tokens_fast(text: str) -> frozenset:
+    return frozenset(_RUN_PATTERN.findall(text))
+
+
+_WORD_CHARS = re.compile(r"[一-龥々ァ-ヴーぁ-んA-Za-z0-9]+")
+_JANOME_NOUN = {"一般", "固有名詞", "サ変接続", "形容動詞語幹"}
+
+
+def _tokens_janome(text: str) -> frozenset:
+    out = set()
+    for tok in _janome().tokenize(text):
+        pos = tok.part_of_speech.split(",")
+        if (
+            pos[0] == "名詞" and pos[1] in _JANOME_NOUN and len(tok.surface) >= 2
+            and not tok.surface.isdigit() and _WORD_CHARS.fullmatch(tok.surface)  # 記号混じりの語を除く
+        ):
+            out.add(tok.surface)
+    return frozenset(out)
+
+
+def doc_token_sets(texts, method: str) -> list[frozenset]:
+    memo = _token_memo()
+    fn = _tokens_janome if method == TOKENIZER_JANOME else _tokens_fast
+    out = []
+    for text in texts:
+        key = (method, hash(text))
+        if key not in memo:
+            memo[key] = fn(text)
+        out.append(memo[key])
+    return out
+
+
+def sample_positions(positions: np.ndarray, n: int, seed: int = 0) -> np.ndarray:
+    if len(positions) <= n:
+        return positions
+    return np.sort(np.random.default_rng(seed).choice(positions, n, replace=False))
+
+
+def enriched_terms(fg, bg, query, exclude, min_count, top_n, rank_by) -> pd.DataFrame:
+    """fg（注目する文書群）に多い語を、bg（比較対象）との 2x2 対数尤度比 G² で評価する。"""
+    n_fg, n_bg = len(fg), len(bg)
+    fg_count, bg_count = Counter(), Counter()
+    for t in fg:
+        fg_count.update(t)
+    for t in bg:
+        bg_count.update(t)
+    terms = [
+        w for w, c in fg_count.items()
+        if c >= min_count and w not in exclude and query not in w and w not in query
+        and not _RATING_SYMBOL.fullmatch(w)  # 格付記号（AA, BBB- など）は語として扱わない
+    ]
+    if not terms or n_fg == 0 or n_bg == 0:
+        return pd.DataFrame()
+    a = np.array([fg_count[w] for w in terms], dtype=float)
+    c = np.array([bg_count.get(w, 0) for w in terms], dtype=float)
+    b, d = n_fg - a, n_bg - c
+    total = n_fg + n_bg
+    col1, col2 = a + c, b + d
+
+    def xlogx(o, e):
+        with np.errstate(all="ignore"):
+            return np.where(o > 0, o * np.log(o / e), 0.0)
+
+    g2 = 2 * (
+        xlogx(a, n_fg * col1 / total) + xlogx(b, n_fg * col2 / total)
+        + xlogx(c, n_bg * col1 / total) + xlogx(d, n_bg * col2 / total)
+    )
+    rate_fg, rate_bg = a / n_fg, c / n_bg
+    lift = rate_fg / ((c + 0.5) / (n_bg + 1))
+    table = pd.DataFrame({
+        "語": terms, "出現文書数": a.astype(int), "出現率": rate_fg,
+        "比較対象の出現率": rate_bg, "リフト": lift, "特徴度": g2,
+    })
+    if rank_by == RANK_BY_SCORE:
+        table = table[rate_fg > rate_bg].sort_values("特徴度", ascending=False)
+    else:
+        table = table.sort_values(["出現文書数", "特徴度"], ascending=False)
+    return table.head(top_n).reset_index(drop=True)
+
+
+def group_order(values, column: str) -> list:
+    values = [v for v in values if pd.notna(v)]
+    if column == RATING_COLUMN:
+        return sorted(values, key=lambda v: (RATING_ORDER.index(v) if v in RATING_ORDER else 99, str(v)))
+    return sorted(values)
+
+
+TERM_COLUMN_CONFIG = {
+    "出現率": st.column_config.NumberColumn(format="percent"),
+    "比較対象の出現率": st.column_config.NumberColumn(format="percent"),
+    "リフト": st.column_config.NumberColumn(format="%.1f"),
+    "特徴度": st.column_config.NumberColumn("特徴度(G²)", format="%.1f"),
+}
+
+
+def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, query: str) -> None:
+    texts = df[text_column]
+    hit_pos = np.flatnonzero(hit)
+
+    group_col = RATING_COLUMN
+    if view in (VIEW_COUNT, VIEW_GROUP_TERMS):
+        options = [c for c in GROUP_COLUMNS if c in df.columns]
+        if not options:
+            st.info("集計に使える列がありません。")
+            return
+        group_col = st.selectbox("集計の軸", options, key="group_col")
+
+    if view == VIEW_COUNT:
+        g = df[group_col]
+        table = pd.DataFrame({"全文書数": g.value_counts(), "一致件数": g[hit].value_counts()}).fillna(0).astype(int)
+        order = group_order(table.index, group_col)
+        table = table.loc[order].rename_axis(group_col).reset_index()
+        table["一致率"] = table["一致件数"] / table["全文書数"]
+        chart_data = table.rename(columns={group_col: "group", "一致件数": "count"})
+        chart_data["group"] = chart_data["group"].astype(str)
+        chart = alt.Chart(chart_data).mark_bar().encode(
+            x=alt.X("group:N", sort=[str(o) for o in order], title=group_col, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("count:Q", title="一致件数"),
+            tooltip=["group", "count"],
+        ).properties(height=300).configure(font=ui["family"] or "sans-serif").configure_axis(
+            labelFontSize=ui["size"], titleFontSize=ui["size"]
+        )
+        st.altair_chart(chart, use_container_width=True)
+        st.dataframe(table, hide_index=True, width="stretch",
+                     column_config={"一致率": st.column_config.NumberColumn(format="percent")})
+        return
+
+    with st.expander("分析の設定", expanded=False):
+        c1, c2, c3, c4 = st.columns(4)
+        methods = [TOKENIZER_FAST] + ([TOKENIZER_JANOME] if _JanomeTokenizer else [])
+        method = c1.selectbox("語の切り出し", methods, key="tok_method",
+                              help="Janome は精度が高い反面、遅いです。初回の解析結果は記憶されます。")
+        rank_by = c2.selectbox("並び順", [RANK_BY_SCORE, RANK_BY_COUNT], key="rank_by")
+        top_n = c3.slider("表示する語数", 10, 100, 30, 5, key="top_n")
+        min_count = c4.slider("最小出現文書数", 1, 20, 3, key="min_count")
+        max_docs = c1.slider("分析に使う最大文書数", 100, 3000, 500, 100, key="max_docs",
+                             help="一致文書・比較対象それぞれ、この件数まで無作為に抽出して解析します。")
+        exclude = set(c2.text_input("除外する語（スペース区切り）", key="exclude").split())
+    if _JanomeTokenizer is None:
+        st.caption("Janome が未インストールのため高速モードのみ利用できます（`pip install janome` で形態素解析が使えます）。")
+
+    fg_pos = sample_positions(hit_pos, max_docs)
+
+    if view == VIEW_TERMS:
+        with st.spinner("共起語を解析中…"):
+            fg = doc_token_sets(texts.iloc[fg_pos], method)
+            bg = doc_token_sets(texts.iloc[sample_positions(np.arange(len(df)), max_docs, seed=1)], method)
+            table = enriched_terms(fg, bg, query, exclude, min_count, top_n, rank_by)
+        st.caption(f"一致文書 {len(fg_pos):,} 件（全 {len(hit_pos):,} 件から抽出）を、全文書の無作為標本 {len(bg):,} 件と比較しています。")
+        if table.empty:
+            st.info("条件に合う語がありませんでした。最小出現文書数を下げてみてください。")
+            return
+        st.dataframe(table, hide_index=True, width="stretch", column_config=TERM_COLUMN_CONFIG)
+        return
+
+    # VIEW_GROUP_TERMS: 軸の値ごとに、一致文書内で特徴的な語（比較対象は一致文書全体）
+    with st.spinner("軸ごとの共起語を解析中…"):
+        all_fg = doc_token_sets(texts.iloc[fg_pos], method)
+        group_values = df[group_col].to_numpy()[fg_pos]
+        columns, skipped = {}, []
+        for value in group_order(pd.unique(group_values), group_col):
+            idx = np.flatnonzero(group_values == value)
+            if len(idx) < max(min_count, 3):
+                skipped.append(f"{value}（{len(idx)}件）")
+                continue
+            fg = [all_fg[i] for i in idx]
+            table = enriched_terms(fg, all_fg, query, exclude, min_count, top_n, rank_by)
+            columns[f"{value}（{len(idx)}件）"] = [
+                f"{r.語} ({r.出現文書数})" for r in table.itertuples()
+            ] if not table.empty else []
+    st.caption(
+        f"{group_col}ごとに、一致文書（{len(fg_pos):,} 件）の中でその区分に特に多い語を表示します。語の後ろの数字は出現文書数です。"
+        if rank_by == RANK_BY_SCORE else
+        f"{group_col}ごとに、一致文書の中で出現文書数が多い語を表示します。語の後ろの数字は出現文書数です。"
+    )
+    if not columns:
+        st.info("件数が足りず表示できませんでした。最小出現文書数を下げるか、絞り込みを緩めてください。")
+        return
+    height = max(len(v) for v in columns.values())
+    st.dataframe(
+        pd.DataFrame({k: v + [""] * (height - len(v)) for k, v in columns.items()}, index=range(1, height + 1)),
+        width="stretch",
+    )
+    if skipped:
+        st.caption("件数が少ないため省略: " + "、".join(skipped))
+
+
+VIEW_RESULTS = "検索結果"
+VIEW_COUNT = "件数の集計"
+VIEW_TERMS = "共起語"
+VIEW_GROUP_TERMS = "区分別の共起語"
+
+
+# ---- 表示設定（フォント・文字サイズ。選択は .search_history.json に保存され次回も維持される） ----
+CUSTOM_FONT_LABEL = "その他（フォント名を入力）"
+DEFAULT_FONT_LABEL = "BIZ UDPゴシック"
+DEFAULT_FONT_SIZE = 18  # px。Streamlit 標準は 16px
+# 表示名: (CSSのfont-family名, Google Fontsから読み込むか, 代替の総称ファミリ)
+FONT_CHOICES = {
+    DEFAULT_FONT_LABEL: ("BIZ UDPGothic", True, "sans-serif"),
+    "BIZ UDゴシック": ("BIZ UDGothic", True, "sans-serif"),
+    "BIZ UDP明朝": ("BIZ UDPMincho", True, "serif"),
+    "Noto Sans JP": ("Noto Sans JP", True, "sans-serif"),
+    "Noto Serif JP": ("Noto Serif JP", True, "serif"),
+    "Zen Kaku Gothic New": ("Zen Kaku Gothic New", True, "sans-serif"),
+    "IBM Plex Sans JP": ("IBM Plex Sans JP", True, "sans-serif"),
+    "ヒラギノ角ゴ（Mac）": ("Hiragino Sans", False, "sans-serif"),
+    "游ゴシック": ("Yu Gothic", False, "sans-serif"),
+    "メイリオ": ("Meiryo", False, "sans-serif"),
+    CUSTOM_FONT_LABEL: ("", True, "sans-serif"),
+}
+
+
+def current_ui() -> dict:
+    """保存済みの設定を初期値にして、現在のフォント・文字サイズを返す。"""
+    saved = load_history().get("ui", {})
+    st.session_state.setdefault("ui_font", saved.get("font", DEFAULT_FONT_LABEL))
+    if st.session_state["ui_font"] not in FONT_CHOICES:
+        st.session_state["ui_font"] = DEFAULT_FONT_LABEL
+    st.session_state.setdefault("ui_font_custom", saved.get("font_custom", ""))
+    st.session_state.setdefault("ui_font_size", int(saved.get("font_size", DEFAULT_FONT_SIZE)))
+
+    family, web, generic = FONT_CHOICES[st.session_state["ui_font"]]
+    if st.session_state["ui_font"] == CUSTOM_FONT_LABEL:
+        family = re.sub(r"[\"';{}<>]", "", st.session_state["ui_font_custom"]).strip()
+    names = [family] if family else []
+    names += [n for n in ["BIZ UDPGothic", "Hiragino Sans", "Yu Gothic"] if n not in names]
+    stack = ", ".join([f'"{n}"' for n in names] + ["Meiryo", generic])
+    return {"family": family, "web": web, "stack": stack, "size": st.session_state["ui_font_size"]}
+
+
+def save_ui_settings() -> None:
+    data = load_history()
+    data["ui"] = {
+        "font": st.session_state["ui_font"],
+        "font_custom": st.session_state["ui_font_custom"],
+        "font_size": st.session_state["ui_font_size"],
+    }
+    save_history(data)
+
+
+def font_css(ui: dict) -> str:
+    """選んだフォントを Google Fonts から読み込み（オフラインや未提供ならシステムフォントに代替）、全体に適用する。"""
+    imports = ""
+    if ui["family"] and ui["web"]:
+        spec = ui["family"].replace(" ", "+")
+        weights = ":wght@400;700" if ui["family"] in {f for f, w, _ in FONT_CHOICES.values() if w} else ""
+        imports = f"@import url('https://fonts.googleapis.com/css2?family={spec}{weights}&display=swap');"
+    return f"""
+<style>
+{imports}
+html {{ font-size: {ui['size']}px !important; }}
+html, body, .stApp,
+.stApp :is(p, span, div, label, li, a, h1, h2, h3, h4, h5, h6, input, textarea, button, th, td, summary, caption, small, strong, code):not([data-testid="stIconMaterial"]):not([class*="material-symbols"]) {{
+  font-family: {ui['stack']} !important;
+}}
+</style>
+"""
+
+
+ui = current_ui()
+st.markdown(font_css(ui) + CSS, unsafe_allow_html=True)
 
 st.title("Japanese Phrase Search")
 st.caption(f"CSV / Excel の「{TEXT_COLUMN}」列から、入力した日本語フレーズの完全一致をリアルタイム検索します。")
@@ -442,6 +738,15 @@ with st.sidebar:
         user = None
     else:
         user = chosen_user
+
+    st.header("表示")
+    st.selectbox("フォント", list(FONT_CHOICES), key="ui_font", on_change=save_ui_settings)
+    st.text_input(
+        "フォント名", key="ui_font_custom", on_change=save_ui_settings,
+        disabled=st.session_state["ui_font"] != CUSTOM_FONT_LABEL,
+        help="Google Fonts にあるフォント名、または手元にインストール済みのフォント名を入力します。",
+    )
+    st.slider("文字サイズ [px]", 12, 32, key="ui_font_size", on_change=save_ui_settings)
 
     st.header("設定")
     context_chars = st.slider("前後の表示文字数", 10, 120, 45, 5)
@@ -522,25 +827,42 @@ def search_section(df: pd.DataFrame, dataset: str, user: str | None) -> None:
         recent_searches(user)
         return
 
-    results, total = exact_search(
+    hit = find_hits(df, text_column, query)
+    total = int(hit.sum())
+
+    if user and user_unchanged:
+        record_search(user, query, dataset, total)
+
+    if total == 0:
+        st.markdown('<div class="search-meta">完全一致: 全 0 件</div>', unsafe_allow_html=True)
+        st.info("完全一致する句は見つかりませんでした。")
+        return
+
+    view = st.radio(
+        "表示", [VIEW_RESULTS, VIEW_COUNT, VIEW_TERMS, VIEW_GROUP_TERMS],
+        horizontal=True, key="view", label_visibility="collapsed",
+    )
+    if view != VIEW_RESULTS:
+        st.markdown(
+            f'<div class="search-meta">完全一致: 全 {total:,} 件 / {len(df):,} 文書</div>',
+            unsafe_allow_html=True,
+        )
+        analysis_view(view, df, hit, query)
+        return
+
+    results = exact_search(
         df=df,
+        hit=hit,
         text_column=text_column,
         query=query,
         max_results=max_results,
         context_chars=context_chars,
     )
 
-    if user and user_unchanged:
-        record_search(user, query, dataset, total)
-
     st.markdown(
         f'<div class="search-meta">完全一致: 全 {total:,} 件中 {len(results):,} 件表示 · 文章をクリックで全文表示</div>',
         unsafe_allow_html=True,
     )
-
-    if not results:
-        st.info("完全一致する句は見つかりませんでした。")
-        return
 
     cards = []
     for result in results:
