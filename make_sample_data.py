@@ -10,9 +10,9 @@ from pathlib import Path
 from openpyxl import Workbook
 
 COLUMNS = [
-    "発行体ID", "発行体コード", "年", "公表日", "発行体名(CDEX)", "発行体名(業務)",
-    "業種", "担当部署", "担当アナリスト", "公表日", "発行体格付", "格付の方向性",
-    "格付アクション", "タグ", "本文",
+    "発行体ID(業務)", "発行体コード(業務)", "証券コード(CDEX)", "年(CDEX)", "公表日(CDEX)",
+    "発行体名(CDEX)", "発行体名(業務)", "業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)",
+    "公表日(業務)", "発行体格付(業務)", "格付の方向性(業務)", "格付アクション(業務)", "タグ", "本文",
 ]
 
 ISSUERS = [
@@ -61,7 +61,7 @@ def build_rows() -> list[list]:
             body = "".join(rng.sample(SENTENCES, 4)) + ACTION_TEXT[action]
             pub = f"{year}-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}"
             rows.append([
-                iid, code, year, pub, cdex, biz, industry, dept,
+                iid, code, str(int(code) + 8000), year, pub, cdex, biz, industry, dept,
                 rng.choice(ANALYSTS), pub, rating, rng.choice(OUTLOOKS), action,
                 "・".join(rng.sample(TAGS, 2)), body,
             ])
@@ -132,7 +132,7 @@ def build_report_rows() -> list[list]:
             )
             pub = f"{year}-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}"
             rows.append([
-                iid, code, year, pub, cdex, biz, industry, dept,
+                iid, code, str(int(code) + 8000), year, pub, cdex, biz, industry, dept,
                 rng.choice(ANALYSTS), pub, rating, outlook, action,
                 "・".join(rng.sample(TAGS, 2)), body,
             ])

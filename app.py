@@ -105,13 +105,18 @@ FILE_PATTERNS = ["*.csv", "*.xlsx", "*.xls"]
 
 # 入力ファイルのフォーマット（この列名で読み込む。検索対象は TEXT_COLUMN のみ）
 TEXT_COLUMN = "本文"
+YEAR_COLUMN = "年(CDEX)"
 EXPECTED_COLUMNS = [
-    "発行体ID", "発行体コード", "年", "公表日", "発行体名(CDEX)", "発行体名(業務)",
-    "業種", "担当部署", "担当アナリスト", "公表日", "発行体格付", "格付の方向性",
-    "格付アクション", "タグ", TEXT_COLUMN,
+    "発行体ID(業務)", "発行体コード(業務)", "証券コード(CDEX)", YEAR_COLUMN, "公表日(CDEX)",
+    "発行体名(CDEX)", "発行体名(業務)", "業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)",
+    "公表日(業務)", "発行体格付(業務)", "格付の方向性(業務)", "格付アクション(業務)", "タグ", TEXT_COLUMN,
 ]
-# フィルタに使う列（サイドバー）
-FILTER_COLUMNS = ["年", "業種", "担当部署", "格付アクション"]
+# 複数選択で絞り込む列（サイドバー）。年は範囲スライダーで指定する。
+MULTI_FILTER_COLUMNS = ["業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)", "格付アクション(業務)"]
+
+# 巨大ファイル対策: 変換済みデータ（Parquet）の保存先
+CACHE_DIR = APP_DIR / ".cache"
+CACHE_VERSION = "v1"  # 列の扱いを変えたら上げる（古いキャッシュを使わない）
 
 
 def list_local_files() -> list[Path]:
@@ -123,26 +128,62 @@ def list_local_files() -> list[Path]:
     return paths
 
 
-@st.cache_data(show_spinner=False, max_entries=20)
-def load_local_file(path: str, mtime: float) -> pd.DataFrame:
-    return load_table(Path(path).read_bytes(), Path(path).name)
+def finalize_table(df: pd.DataFrame) -> pd.DataFrame:
+    """必要な列だけ残し、絞り込み列はカテゴリ型、年は整数にしてメモリと処理を軽くする。"""
+    df = df[[c for c in EXPECTED_COLUMNS if c in df.columns]].copy()
+    for col in MULTI_FILTER_COLUMNS:
+        if col in df.columns:
+            df[col] = df[col].astype("category")
+    if YEAR_COLUMN in df.columns:
+        df[YEAR_COLUMN] = pd.to_numeric(df[YEAR_COLUMN], errors="coerce").astype("Int64")
+    return df
 
 
-@st.cache_data(show_spinner=False, max_entries=20)
-def load_table(file_bytes: bytes, filename: str) -> pd.DataFrame:
+def parse_table(file_bytes: bytes, filename: str) -> pd.DataFrame:
     """CSV / Excel を読み込む。ID・コードの先頭ゼロを保つため全列を文字列で読む。"""
+    wanted = set(EXPECTED_COLUMNS)
     if filename.lower().endswith((".xlsx", ".xls")):
         try:
-            return pd.read_excel(io.BytesIO(file_bytes), dtype=str)
+            return pd.read_excel(io.BytesIO(file_bytes), dtype=str, usecols=lambda c: c in wanted)
         except Exception as exc:
             raise RuntimeError(f"Excelを読み込めませんでした: {exc}")
     last_error = None
     for enc in ["utf-8-sig", "utf-8", "cp932", "shift_jis"]:
-        try:
-            return pd.read_csv(io.BytesIO(file_bytes), encoding=enc, dtype=str)
-        except Exception as exc:
-            last_error = exc
+        for engine in ("pyarrow", "c"):  # pyarrow は C エンジンより数倍速い。失敗したら C に切替
+            try:
+                kwargs = {"usecols": lambda c: c in wanted} if engine == "c" else {}
+                return pd.read_csv(io.BytesIO(file_bytes), encoding=enc, dtype=str, engine=engine, **kwargs)
+            except Exception as exc:
+                last_error = exc
     raise RuntimeError(f"CSVを読み込めませんでした: {last_error}")
+
+
+# cache_resource: 巨大な DataFrame をコピー/シリアライズせずに再実行間で共有する（読み取り専用で扱うこと）
+@st.cache_resource(show_spinner="読み込み中…（初回のみ時間がかかります）", max_entries=5)
+def load_local_file(path: str, mtime_ns: int) -> pd.DataFrame:
+    """初回は CSV/Excel を読んで Parquet に変換して保存し、2回目以降は Parquet から高速に読む。"""
+    src = Path(path)
+    stem = f"{src.stem}-{src.suffix[1:]}"
+    cache_file = CACHE_DIR / f"{stem}-{mtime_ns}-{CACHE_VERSION}.parquet"
+    if cache_file.exists():
+        try:
+            return pd.read_parquet(cache_file)
+        except Exception:
+            cache_file.unlink(missing_ok=True)
+    df = finalize_table(parse_table(src.read_bytes(), src.name))
+    try:
+        CACHE_DIR.mkdir(exist_ok=True)
+        for old in CACHE_DIR.glob(f"{stem}-*.parquet"):
+            old.unlink(missing_ok=True)
+        df.to_parquet(cache_file)
+    except Exception:
+        pass  # キャッシュに書けなくても読み込み自体は成功させる
+    return df
+
+
+@st.cache_resource(show_spinner="読み込み中…", max_entries=3)
+def load_uploaded(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    return finalize_table(parse_table(file_bytes, filename))
 
 
 def normalize_text(text: str, use_nfkc: bool, ignore_spaces: bool) -> str:
@@ -308,15 +349,15 @@ def meta_html(row: pd.Series) -> str:
         val = row.get(col)
         return "" if pd.isna(val) else html.escape(str(val))
 
-    rating = " ".join(x for x in [v("発行体格付"), v("格付の方向性")] if x)
+    rating = " ".join(x for x in [v("発行体格付(業務)"), v("格付の方向性(業務)")] if x)
     items = [
         ("", f"<b>{v('発行体名(CDEX)')}</b>"),
-        ("年", v("年")),
-        ("公表日", v("公表日")),
-        ("業種", v("業種")),
+        ("年", v(YEAR_COLUMN)),
+        ("公表日", v("公表日(CDEX)")),
+        ("業種", v("業種(業務)")),
         ("格付", rating),
-        ("アクション", v("格付アクション")),
-        ("担当", v("担当アナリスト")),
+        ("アクション", v("格付アクション(業務)")),
+        ("担当", v("担当アナリスト(CDEX)")),
         ("タグ", v("タグ")),
     ]
     return " · ".join(f"{label} {val}".strip() for label, val in items if val and val != "<b></b>")
@@ -328,33 +369,30 @@ def exact_search(
     query: str,
     max_results: int,
     context_chars: int,
-) -> list[dict]:
+) -> tuple[list[dict], int]:
+    """完全一致検索。まず全行を一括（ベクトル化）で判定し、ヒットした上位 max_results 件だけ
+    Python でスパン計算・HTML 化する。戻り値は (表示用の結果, 全ヒット件数)。"""
+    hit = df[text_column].str.contains(query, regex=False, na=False).to_numpy()
+    total = int(hit.sum())
+    subset = df[hit].head(max_results)
+
     results = []
-
-    for row_idx, value in df[text_column].items():
-        if pd.isna(value):
-            continue
-
-        text = str(value)
+    for pos in range(len(subset)):
+        row = subset.iloc[pos]
+        text = str(row[text_column])
         spans = find_all_literal(text, query)
         if not spans:
             continue
-
         results.append(
             {
-                "row_idx": row_idx,
-                "meta": meta_html(df.loc[row_idx]),
+                "meta": meta_html(row),
                 "text": text,
                 "spans": spans,
                 "snippet": build_snippet(text, spans, context_chars=context_chars),
                 "count": len(spans),
             }
         )
-
-        if len(results) >= max_results:
-            break
-
-    return results
+    return results, total
 
 
 st.title("Japanese Phrase Search")
@@ -370,10 +408,10 @@ try:
         if uploaded is None:
             st.info("CSV または Excel ファイルをアップロードしてください。")
             st.stop()
-        df = load_table(uploaded.getvalue(), uploaded.name)
+        df = load_uploaded(uploaded.getvalue(), uploaded.name)
     else:
         path = dataset_labels[dataset]
-        df = load_local_file(str(path), path.stat().st_mtime)
+        df = load_local_file(str(path), path.stat().st_mtime_ns)
 except Exception as exc:
     st.error(str(exc))
     st.stop()
@@ -410,15 +448,29 @@ with st.sidebar:
     max_results = st.slider("最大表示件数", 10, 500, 100, 10)
 
     st.subheader("絞り込み")
-    mask = pd.Series(True, index=df.index)
-    for col in FILTER_COLUMNS:
+    mask = None  # 絞り込みが無いときは df をコピーしない
+
+    if YEAR_COLUMN in df.columns and df[YEAR_COLUMN].notna().any():
+        year_min, year_max = int(df[YEAR_COLUMN].min()), int(df[YEAR_COLUMN].max())
+        if year_min < year_max:
+            year_range = st.slider(YEAR_COLUMN, year_min, year_max, (year_min, year_max))
+            if year_range != (year_min, year_max):
+                mask = df[YEAR_COLUMN].between(*year_range).fillna(False).to_numpy()
+        else:
+            st.caption(f"{YEAR_COLUMN}: {year_min} のみ")
+
+    for col in MULTI_FILTER_COLUMNS:
         if col not in df.columns:
             continue
         options = sorted(df[col].dropna().unique())
-        chosen = st.multiselect(col, options)
+        chosen = st.multiselect(col, options, placeholder="すべて（複数選択可）")
         if chosen:
-            mask &= df[col].isin(chosen)
-    df = df[mask]
+            m = df[col].isin(chosen).to_numpy()
+            mask = m if mask is None else (mask & m)
+
+    if mask is not None:
+        df = df[mask]
+        st.caption(f"絞り込み後: {len(df):,} 行")
 
 text_column = TEXT_COLUMN
 
@@ -470,7 +522,7 @@ def search_section(df: pd.DataFrame, dataset: str, user: str | None) -> None:
         recent_searches(user)
         return
 
-    results = exact_search(
+    results, total = exact_search(
         df=df,
         text_column=text_column,
         query=query,
@@ -479,10 +531,10 @@ def search_section(df: pd.DataFrame, dataset: str, user: str | None) -> None:
     )
 
     if user and user_unchanged:
-        record_search(user, query, dataset, len(results))
+        record_search(user, query, dataset, total)
 
     st.markdown(
-        f'<div class="search-meta">完全一致: {len(results):,} 件表示 / 最大 {max_results:,} 件 · 文章をクリックで全文表示</div>',
+        f'<div class="search-meta">完全一致: 全 {total:,} 件中 {len(results):,} 件表示 · 文章をクリックで全文表示</div>',
         unsafe_allow_html=True,
     )
 
