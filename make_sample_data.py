@@ -244,6 +244,15 @@ def build_report_rows() -> list[list]:
     return rows
 
 
+def split_into_sentences(rows: list[list]) -> list[list]:
+    """レポート1件を、本文の1文ごとに1行へ分割する（他の列は各行にコピー）。実データと同じ「1文1行」形式の動作確認用。"""
+    out = []
+    for r in rows:
+        for sentence in (x + "。" for x in r[-1].split("。") if x):
+            out.append(r[:-1] + [sentence])
+    return out
+
+
 def write_both(out: Path, stem: str, rows: list[list]) -> None:
     with open(out / f"{stem}.csv", "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
@@ -262,7 +271,9 @@ def main() -> None:
     out = Path(__file__).parent / "data"
     out.mkdir(exist_ok=True)
     write_both(out, "sample_issuer_reports", build_rows())
-    write_both(out, "sample_rating_reports", build_report_rows())
+    report_rows = build_report_rows()
+    write_both(out, "sample_rating_reports", report_rows)
+    write_both(out, "sample_rating_sentences", split_into_sentences(report_rows))
 
 if __name__ == "__main__":
     main()

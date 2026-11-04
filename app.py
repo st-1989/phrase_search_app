@@ -523,36 +523,261 @@ TERM_COLUMN_CONFIG = {
 }
 
 
+def combo_key(values: tuple, columns: list[str]) -> tuple:
+    """複数軸の組み合わせを、各軸の自然な順（格付は AAA→…）で並べるためのキー。"""
+    return tuple(
+        (RATING_ORDER.index(v) if v in RATING_ORDER else 99, str(v)) if c == RATING_COLUMN else v
+        for v, c in zip(values, columns)
+    )
+
+
+def combo_label(values: tuple) -> str:
+    return " / ".join(str(v) for v in values)
+
+
+def wilson_interval(k, n, z: float = 1.96):
+    """一致率の Wilson 信頼区間（既定は 95%）。件数が少ない区分の不確かさを示す。"""
+    k, n = np.asarray(k, float), np.asarray(n, float)
+    with np.errstate(all="ignore"):
+        p = k / n
+        denom = 1 + z**2 / n
+        center = (p + z**2 / (2 * n)) / denom
+        half = z * np.sqrt(p * (1 - p) / n + z**2 / (4 * n**2)) / denom
+    return center - half, center + half
+
+
+def aggregate_by(df: pd.DataFrame, hit: np.ndarray, columns: list[str]) -> tuple[pd.DataFrame, float]:
+    """軸（1つ以上）ごとの一致件数・全文書数・一致率・信頼区間・全体比・標準化残差。"""
+    total = df.groupby(columns, observed=True).size().rename("全文書数")
+    hits = df[hit].groupby(columns, observed=True).size().rename("一致件数")
+    t = pd.concat([total, hits], axis=1).fillna(0).astype(int).reset_index()
+    p0 = float(hit.sum()) / len(df)  # 全体の一致率（比較の基準）
+    n, k = t["全文書数"].to_numpy(float), t["一致件数"].to_numpy(float)
+    t["一致率"] = k / n
+    t["下限"], t["上限"] = wilson_interval(k, n)
+    t["全体比"] = t["一致率"] / p0
+    t["期待件数"] = n * p0
+    with np.errstate(all="ignore"):
+        t["標準化残差"] = (k - n * p0) / np.sqrt(n * p0 * (1 - p0))
+    return t, p0
+
+
+COUNT_SORTS = ["軸の順", "一致率（高い順）", "全体比（高い順）", "標準化残差（絶対値の大きい順）", "一致件数（多い順）"]
+CHART_METRICS = {  # 指標: (表示形式, 中心値。None なら一方向の色)
+    "一致率": ("{:.0%}", None),
+    "一致件数": ("{:,.0f}", None),
+    "全文書数": ("{:,.0f}", None),
+    "全体比": ("{:.1f}", 1.0),
+    "標準化残差": ("{:.1f}", 0.0),
+}
+
+
+def text_px(text: str, size: float) -> float:
+    """ラベルの概算幅（全角は文字サイズ分、半角は約0.55倍）。"""
+    return sum(size if ord(ch) > 255 else size * 0.55 for ch in text)
+
+
+def count_view(df: pd.DataFrame, hit: np.ndarray, group_cols: list[str], unit_name: str = "文") -> None:
+    table, p0 = aggregate_by(df, hit, group_cols)
+    c1, c2, c3 = st.columns(3)
+    chart_metric = c1.selectbox("グラフの指標", list(CHART_METRICS), key="chart_metric",
+                                help=f"一致件数・全文書数は元の件数（単位: {unit_name}）、一致率は全文書数に占める割合です。")
+    sort_by = c2.selectbox("並び順", COUNT_SORTS, key="count_sort")
+    min_docs = c3.number_input("最小の全文書数", 1, 100000, 1, key="count_min_docs",
+                               help="これより文書数が少ない組み合わせは表示しません（率が不安定なため）。")
+    table = table[table["全文書数"] >= min_docs]
+    if table.empty:
+        st.info("条件に合う組み合わせがありません。")
+        return
+
+    keys = [combo_key(tuple(r), group_cols) for r in table[group_cols].itertuples(index=False)]
+    table = table.assign(_k=keys).sort_values("_k")  # まず軸の順
+    if sort_by.startswith("一致率"):
+        table = table.sort_values("一致率", ascending=False, kind="stable")
+    elif sort_by.startswith("全体比"):
+        table = table.sort_values("全体比", ascending=False, kind="stable")
+    elif sort_by.startswith("標準化残差"):
+        table = table.iloc[np.argsort(-table["標準化残差"].abs().fillna(0).to_numpy(), kind="stable")]
+    elif sort_by.startswith("一致件数"):
+        table = table.sort_values("一致件数", ascending=False, kind="stable")
+    table = table.drop(columns="_k").reset_index(drop=True)
+
+    label = table[group_cols].apply(lambda r: combo_label(tuple(r)), axis=1)
+    size = ui["size"]
+    # ラベルを間引かず全部表示する: 軸ラベルの重なり除去と省略を止め、カテゴリ数×ラベル幅に応じて図の幅を広げる
+    axis_font = dict(labelFontSize=size, titleFontSize=size, labelOverlap=False, labelLimit=0)
+    config = dict(font=ui["family"] or "sans-serif")
+    fmt, mid = CHART_METRICS[chart_metric]
+    col = chart_metric
+
+    if len(group_cols) == 1:
+        d = pd.DataFrame({"label": label, "val": table[col], "rate": table["一致率"], "lo": table["下限"],
+                          "hi": table["上限"], "n": table["全文書数"], "hits": table["一致件数"]})
+        order = d["label"].tolist()
+        step = int(max(44, max(text_px(l, size) for l in order) + 18))
+        axis_fmt = alt.Axis(format="%") if col == "一致率" else alt.Axis()
+        bars = alt.Chart(d).mark_bar().encode(
+            x=alt.X("label:N", sort=order, title=group_cols[0], axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("val:Q", title=col, axis=axis_fmt),
+            tooltip=["label", "hits", "n", alt.Tooltip("rate:Q", format=".1%")],
+        )
+        layers = [bars]
+        if col == "一致率":  # 信頼区間（黒線）と全体の一致率（点線）
+            layers.append(alt.Chart(d).mark_rule(color="black", strokeWidth=2).encode(
+                x=alt.X("label:N", sort=order), y="lo:Q", y2="hi:Q"))
+            refs = [p0]
+        elif col == "全体比":
+            refs = [1.0]
+        elif col == "標準化残差":
+            refs = [-2.0, 0.0, 2.0]
+        else:
+            refs = []
+        for y in refs:
+            layers.append(alt.Chart(pd.DataFrame({"y": [y]})).mark_rule(color="gray", strokeDash=[6, 4]).encode(y="y:Q"))
+        chart = alt.layer(*layers).properties(width=alt.Step(step), height=320).configure(**config).configure_axis(**axis_font)
+        st.altair_chart(chart, use_container_width=False)
+    elif len(group_cols) == 2:
+        yc, xc = group_cols
+        vals = table[col]
+        center = mid if mid is not None else float(vals.mean())
+        dev = float((vals - center).abs().max()) or 1.0
+        txt = vals.map(lambda v: "" if pd.isna(v) else fmt.format(v))
+        d = pd.DataFrame({
+            "y": table[yc].astype(str), "x": table[xc].astype(str), "val": vals, "txt": txt,
+            "tc": np.where((vals - center).abs() > dev / 2, "white", "black"),  # 濃いセルは白文字
+            "n": table["全文書数"], "hits": table["一致件数"],
+        })
+        xo = [str(v) for v in group_order(table[xc].unique(), xc)]
+        yo = [str(v) for v in group_order(table[yc].unique(), yc)]
+        scale = (alt.Scale(scheme="redblue", domainMid=mid, reverse=True) if mid is not None
+                 else alt.Scale(scheme="blues"))
+        enc = dict(x=alt.X("x:N", sort=xo, title=xc, axis=alt.Axis(labelAngle=0)),
+                   y=alt.Y("y:N", sort=yo, title=yc))
+        rect = alt.Chart(d).mark_rect().encode(
+            color=alt.Color("val:Q", title=col, scale=scale), tooltip=["y", "x", "hits", "n", "txt"], **enc)
+        text = alt.Chart(d).mark_text(fontSize=size * 0.8).encode(
+            text="txt:N",
+            color=alt.Color("tc:N", legend=None, scale=alt.Scale(domain=["black", "white"], range=["black", "white"])),
+            **enc)
+        cell_w = int(max(text_px(x, size) for x in xo + ["-00.0"]) + 18)
+        cell_h = int(size * 2.2)
+        chart = (rect + text).properties(width=alt.Step(cell_w), height=alt.Step(cell_h)) \
+            .configure(**config).configure_axis(**axis_font)
+        st.altair_chart(chart, use_container_width=False)
+    else:
+        st.caption("3軸以上は表のみで表示します（グラフは 1〜2 軸のとき）。")
+
+    st.dataframe(
+        table, hide_index=True, width="stretch",
+        column_config={
+            "一致率": st.column_config.NumberColumn(format="percent"),
+            "下限": st.column_config.NumberColumn("信頼区間 下限", format="percent"),
+            "上限": st.column_config.NumberColumn("信頼区間 上限", format="percent"),
+            "全体比": st.column_config.NumberColumn(format="%.2f"),
+            "期待件数": st.column_config.NumberColumn(format="%.1f"),
+            "標準化残差": st.column_config.NumberColumn(format="%.1f"),
+        },
+    )
+    st.caption(
+        f"全体の一致率は {p0:.1%}（{int(hit.sum()):,} / {len(df):,}）。"
+        "一致率の区間は Wilson の 95% 信頼区間です（件数が少ないほど広くなります）。"
+        "全体比 = 一致率 ÷ 全体の一致率。期待件数 = 全文書数 × 全体の一致率。"
+        "標準化残差 = (一致件数 − 期待件数) ÷ √(全文書数 × 全体率 × (1 − 全体率))で、絶対値が 2 を超えると偶然とは考えにくい偏りの目安です。"
+        "グラフの点線は全体の一致率、黒線は信頼区間です。"
+    )
+
+
+UNIT_ROW = "文（1行を1件）"
+UNIT_REPORT = "レポート（発行体ID＋公表日で1件）"
+
+
+def report_key_columns(df: pd.DataFrame) -> list[str] | None:
+    """レポートを1件に定める列（発行体ID＋公表日）。公表日(業務)が無ければ公表日(CDEX)で代用する。"""
+    if "発行体ID(業務)" not in df.columns:
+        return None
+    for date_col in ("公表日(業務)", "公表日(CDEX)"):
+        if date_col in df.columns:
+            return ["発行体ID(業務)", date_col]
+    return None
+
+
+class Units:
+    """集計・分析の単位。行を1件とするか、レポート（同じ発行体ID・公表日の行の集まり）を1件とするかを同じ形で扱う。
+
+    n: 単位の数 / hit: 単位ごとの一致（レポートは「1行でも一致すれば一致」）
+    first_idx: 単位の先頭行（軸の値はここから取る） / order, starts, counts: 単位に属する行の位置
+    """
+
+    def __init__(self, df: pd.DataFrame, hit: np.ndarray, report_cols: list[str] | None):
+        if report_cols is None:
+            self.n = len(df)
+            self.hit = hit
+            self.first_idx = np.arange(self.n)
+            self.order = self.first_idx
+            self.counts = np.ones(self.n, dtype=int)
+        else:
+            rid = df.groupby(report_cols, sort=False, observed=True, dropna=False).ngroup().to_numpy()
+            self.n = int(rid.max()) + 1 if len(rid) else 0
+            self.hit = np.zeros(self.n, dtype=bool)
+            self.hit[rid[hit]] = True
+            _, self.first_idx = np.unique(rid, return_index=True)
+            self.order = np.argsort(rid, kind="stable")
+            self.counts = np.bincount(rid, minlength=self.n)
+        self.starts = np.concatenate([[0], np.cumsum(self.counts)[:-1]]).astype(int) if self.n else np.array([], int)
+        self.is_report = report_cols is not None
+
+    def frame(self, df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+        """単位ごとの軸の値（単位の先頭行の値。レポート内で値は同じ前提）。"""
+        return df[columns].iloc[self.first_idx].reset_index(drop=True)
+
+    def token_sets(self, texts: pd.Series, units: np.ndarray, method: str) -> list[frozenset]:
+        """指定した単位の語の集合（レポートは所属する全行の語の和集合）。"""
+        pos = [self.order[self.starts[u]: self.starts[u] + self.counts[u]] for u in units]
+        flat = np.concatenate(pos) if pos else np.array([], int)
+        toks = doc_token_sets(texts.iloc[flat], method)
+        out, i = [], 0
+        for p in pos:
+            group = toks[i: i + len(p)]
+            out.append(group[0] if len(group) == 1 else frozenset().union(*group))
+            i += len(p)
+        return out
+
+
 def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, query: str) -> None:
     texts = df[text_column]
-    hit_pos = np.flatnonzero(hit)
 
-    group_col = RATING_COLUMN
+    group_cols = [RATING_COLUMN]
     if view in (VIEW_COUNT, VIEW_GROUP_TERMS):
         options = [c for c in GROUP_COLUMNS if c in df.columns]
         if not options:
             st.info("集計に使える列がありません。")
             return
-        group_col = st.selectbox("集計の軸", options, key="group_col")
+        group_cols = st.multiselect(
+            "集計の軸（複数選択可。選んだ順に左→右の軸になります）", options,
+            default=[c for c in [RATING_COLUMN] if c in options], key="group_cols",
+        )
+        if not group_cols:
+            st.info("集計の軸を1つ以上選んでください。")
+            return
+
+    # 集計の単位: 1文1行のデータでは、レポートの長さ（文数）の違いが件数・一致率に影響するため、レポート単位も選べる
+    report_cols = report_key_columns(df)
+    unit_options = [UNIT_ROW] + ([UNIT_REPORT] if report_cols else [])
+    unit = st.radio(
+        "集計の単位", unit_options, index=len(unit_options) - 1, horizontal=True, key="unit",
+        help="文: 1行ごとに数えます。レポート: 発行体IDと公表日が同じ行を1件にまとめ、1行でも一致すれば一致とします"
+             "（1文1行のデータでは、文数の多いレポートが有利になる影響を除けます）。共起語も同じ単位で数えます。",
+    )
+    if not report_cols:
+        st.caption("発行体ID(業務)・公表日の列が無いため、レポート単位は選べません。")
+    units = Units(df, hit, report_cols if unit == UNIT_REPORT else None)
+    unit_name = "レポート" if units.is_report else "文"
+    st.caption(f"単位: {unit_name}。一致 {int(units.hit.sum()):,} / 全 {units.n:,} {unit_name}"
+               + (f"（{report_cols[0]} と {report_cols[1]} で区別）" if units.is_report else ""))
 
     if view == VIEW_COUNT:
-        g = df[group_col]
-        table = pd.DataFrame({"全文書数": g.value_counts(), "一致件数": g[hit].value_counts()}).fillna(0).astype(int)
-        order = group_order(table.index, group_col)
-        table = table.loc[order].rename_axis(group_col).reset_index()
-        table["一致率"] = table["一致件数"] / table["全文書数"]
-        chart_data = table.rename(columns={group_col: "group", "一致件数": "count"})
-        chart_data["group"] = chart_data["group"].astype(str)
-        chart = alt.Chart(chart_data).mark_bar().encode(
-            x=alt.X("group:N", sort=[str(o) for o in order], title=group_col, axis=alt.Axis(labelAngle=0)),
-            y=alt.Y("count:Q", title="一致件数"),
-            tooltip=["group", "count"],
-        ).properties(height=300).configure(font=ui["family"] or "sans-serif").configure_axis(
-            labelFontSize=ui["size"], titleFontSize=ui["size"]
-        )
-        st.altair_chart(chart, use_container_width=True)
-        st.dataframe(table, hide_index=True, width="stretch",
-                     column_config={"一致率": st.column_config.NumberColumn(format="percent")})
+        count_df = units.frame(df, group_cols) if units.is_report else df
+        count_view(count_df, units.hit, group_cols, unit_name)
         return
 
     with st.expander("分析の設定", expanded=False):
@@ -562,49 +787,57 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, query: str) -> N
                               help="Janome は精度が高い反面、遅いです。初回の解析結果は記憶されます。")
         rank_by = c2.selectbox("並び順", [RANK_BY_SCORE, RANK_BY_COUNT], key="rank_by")
         top_n = c3.slider("表示する語数", 10, 100, 30, 5, key="top_n")
-        min_count = c4.slider("最小出現文書数", 1, 20, 3, key="min_count")
-        max_docs = c1.slider("分析に使う最大文書数", 100, 3000, 500, 100, key="max_docs",
-                             help="一致文書・比較対象それぞれ、この件数まで無作為に抽出して解析します。")
+        min_count = c4.slider("最小出現数", 1, 20, 3, key="min_count",
+                              help="その語を含む（文／レポート）の数の下限です。")
+        max_docs = c1.slider("分析に使う最大件数", 100, 3000, 500, 100, key="max_docs",
+                             help="一致・比較対象それぞれ、この件数まで無作為に抽出して解析します。")
         exclude = set(c2.text_input("除外する語（スペース区切り）", key="exclude").split())
     if _JanomeTokenizer is None:
         st.caption("Janome が未インストールのため高速モードのみ利用できます（`pip install janome` で形態素解析が使えます）。")
 
-    fg_pos = sample_positions(hit_pos, max_docs)
+    hit_units = np.flatnonzero(units.hit)
+    fg_units = sample_positions(hit_units, max_docs)
 
     if view == VIEW_TERMS:
         with st.spinner("共起語を解析中…"):
-            fg = doc_token_sets(texts.iloc[fg_pos], method)
-            bg = doc_token_sets(texts.iloc[sample_positions(np.arange(len(df)), max_docs, seed=1)], method)
+            fg = units.token_sets(texts, fg_units, method)
+            bg = units.token_sets(texts, sample_positions(np.arange(units.n), max_docs, seed=1), method)
             table = enriched_terms(fg, bg, query, exclude, min_count, top_n, rank_by)
-        st.caption(f"一致文書 {len(fg_pos):,} 件（全 {len(hit_pos):,} 件から抽出）を、全文書の無作為標本 {len(bg):,} 件と比較しています。")
+        st.caption(f"一致した{unit_name} {len(fg_units):,} 件（全 {len(hit_units):,} 件から抽出）を、"
+                   f"全{unit_name}の無作為標本 {len(bg):,} 件と比較しています。")
         if table.empty:
-            st.info("条件に合う語がありませんでした。最小出現文書数を下げてみてください。")
+            st.info("条件に合う語がありませんでした。最小出現数を下げてみてください。")
             return
         st.dataframe(table, hide_index=True, width="stretch", column_config=TERM_COLUMN_CONFIG)
         return
 
-    # VIEW_GROUP_TERMS: 軸の値ごとに、一致文書内で特徴的な語（比較対象は一致文書全体）
+    # VIEW_GROUP_TERMS: 軸の値ごとに、一致した単位の中で特徴的な語（比較対象は一致した単位全体）
     with st.spinner("軸ごとの共起語を解析中…"):
-        all_fg = doc_token_sets(texts.iloc[fg_pos], method)
-        group_values = df[group_col].to_numpy()[fg_pos]
+        all_fg = units.token_sets(texts, fg_units, method)
+        gdf = df[group_cols].iloc[units.first_idx[fg_units]]
+        valid = gdf.notna().all(axis=1).to_numpy()
+        combos = np.empty(len(fg_units), dtype=object)
+        combos[:] = list(zip(*[gdf[c].to_numpy() for c in group_cols]))
         columns, skipped = {}, []
-        for value in group_order(pd.unique(group_values), group_col):
-            idx = np.flatnonzero(group_values == value)
+        for value in sorted(set(combos[valid]), key=lambda v: combo_key(v, group_cols)):
+            idx = np.flatnonzero(valid & np.array([c == value for c in combos]))
+            name = combo_label(value)
             if len(idx) < max(min_count, 3):
-                skipped.append(f"{value}（{len(idx)}件）")
+                skipped.append(f"{name}（{len(idx)}件）")
                 continue
             fg = [all_fg[i] for i in idx]
             table = enriched_terms(fg, all_fg, query, exclude, min_count, top_n, rank_by)
-            columns[f"{value}（{len(idx)}件）"] = [
+            columns[f"{name}（{len(idx)}件）"] = [
                 f"{r.語} ({r.出現文書数})" for r in table.itertuples()
             ] if not table.empty else []
+    axes_name = " × ".join(group_cols)
     st.caption(
-        f"{group_col}ごとに、一致文書（{len(fg_pos):,} 件）の中でその区分に特に多い語を表示します。語の後ろの数字は出現文書数です。"
+        f"{axes_name}ごとに、一致した{unit_name}（{len(fg_units):,} 件）の中でその区分に特に多い語を表示します。語の後ろの数字は出現数です。"
         if rank_by == RANK_BY_SCORE else
-        f"{group_col}ごとに、一致文書の中で出現文書数が多い語を表示します。語の後ろの数字は出現文書数です。"
+        f"{axes_name}ごとに、一致した{unit_name}の中で出現数が多い語を表示します。語の後ろの数字は出現数です。"
     )
     if not columns:
-        st.info("件数が足りず表示できませんでした。最小出現文書数を下げるか、絞り込みを緩めてください。")
+        st.info("件数が足りず表示できませんでした。最小出現数を下げるか、絞り込みを緩めてください。")
         return
     height = max(len(v) for v in columns.values())
     st.dataframe(
