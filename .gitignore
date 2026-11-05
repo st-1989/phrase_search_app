@@ -1,3 +1,14 @@
 .search_history.json
 .search_history.tmp
 .cache/
+
+# Claude Code
+.claude/
+.claude.local.md
+.agents/
+
+.mypy_cache
+
+# Environment variables
+.env
+.env.*
