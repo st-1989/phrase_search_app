@@ -885,7 +885,7 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[st
         methods = [TOKENIZER_FAST] + ([TOKENIZER_JANOME] if _JanomeTokenizer else [])
         method = c1.selectbox("語の切り出し", methods, key="tok_method",
                               help="Janome は精度が高い反面、遅いです。初回の解析結果は記憶されます。")
-        rank_by = c2.selectbox("並び順", [RANK_BY_SCORE, RANK_BY_COUNT], key="rank_by")
+        rank_by = c2.selectbox("並び順", [RANK_BY_COUNT, RANK_BY_SCORE], key="rank_by")
         all_terms = c3.checkbox("語を全て表示", value=True, key="all_terms")
         top_n = sys.maxsize if all_terms else c3.slider("表示する語数", 10, 500, 30, 5, key="top_n")
         min_count = c4.slider("最小出現数", 1, 20, 3, key="min_count",
@@ -1119,10 +1119,10 @@ with st.sidebar:
         else:
             st.caption(f"{YEAR_COLUMN}: {year_min} のみ")
 
-    for col in MULTI_FILTER_COLUMNS:
+    for col in [RATING_COLUMN] + MULTI_FILTER_COLUMNS:
         if col not in df.columns:
             continue
-        options = sorted(df[col].dropna().unique())
+        options = group_order(df[col].dropna().unique(), col)  # 格付符号は AAA→D の順
         chosen = st.multiselect(col, options, placeholder="すべて（複数選択可）")
         if chosen:
             m = df[col].isin(chosen).to_numpy()
