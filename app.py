@@ -760,14 +760,19 @@ class Units:
             self.counts = np.bincount(rid, minlength=self.n)
         self.starts = np.concatenate([[0], np.cumsum(self.counts)[:-1]]).astype(int) if self.n else np.array([], int)
         self.is_report = report_cols is not None
+        self.row_hit = hit
 
     def frame(self, df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
         """単位ごとの軸の値（単位の先頭行の値。レポート内で値は同じ前提）。"""
         return df[columns].iloc[self.first_idx].reset_index(drop=True)
 
-    def token_sets(self, texts: pd.Series, units: np.ndarray, method: str) -> list[frozenset]:
-        """指定した単位の語の集合（レポートは所属する全行の語の和集合）。"""
+    def token_sets(self, texts: pd.Series, units: np.ndarray, method: str,
+                   only_hit: bool = False) -> list[frozenset]:
+        """指定した単位の語の集合（レポートは所属する行の語の和集合）。
+        only_hit=True なら、検索語を含む文（行）の語だけを数える＝同じ文の中での共起に限る。"""
         pos = [self.order[self.starts[u]: self.starts[u] + self.counts[u]] for u in units]
+        if only_hit:
+            pos = [p[self.row_hit[p]] for p in pos]
         flat = np.concatenate(pos) if pos else np.array([], int)
         toks = doc_token_sets(texts.iloc[flat], method)
         out, i = [], 0
@@ -781,7 +786,7 @@ class Units:
 def term_context_view(df: pd.DataFrame, units: Units, unit_ids: np.ndarray, token_sets: list[frozenset],
                       term: str, queries: list[str], unit_name: str) -> None:
     """選んだ語が実際にどんな文で使われているかを、検索フレーズと語の両方をハイライトして表示する。
-    レポート単位のときは、語と検索フレーズが別の文にあっても、同じレポート内の該当文をまとめて出す。"""
+    共起は1つの文の中に限る（検索フレーズと語が同じ文にある文だけを出す）。"""
     sel = [int(u) for u, t in zip(unit_ids, token_sets) if term in t]
     st.markdown(f"#### 「{term}」が使われている文")
     if not sel:
@@ -795,8 +800,8 @@ def term_context_view(df: pd.DataFrame, units: Units, unit_ids: np.ndarray, toke
         for pos in sorted(rows):
             text = str(texts.iloc[pos])
             spans = [sp for k in keys for sp in find_all_literal(text, k)]
-            if not spans:
-                continue
+            if not spans or term not in text or not any(q in text for q in queries):
+                continue  # 検索フレーズと語が同じ文にあるものだけ
             if shown >= max_results:
                 break
             shown += 1
@@ -874,7 +879,7 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[st
 
     if view == VIEW_TERMS:
         with st.spinner("共起語を解析中…"):
-            fg = units.token_sets(texts, fg_units, method)
+            fg = units.token_sets(texts, fg_units, method, only_hit=True)
             bg = units.token_sets(texts, sample_positions(np.arange(units.n), max_docs, seed=1), method)
             table = enriched_terms(fg, bg, queries, exclude, min_count, top_n, rank_by)
         st.caption(f"一致した{unit_name} {len(fg_units):,} 件（全 {len(hit_units):,} 件から抽出）を、"
@@ -894,7 +899,7 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[st
 
     # VIEW_GROUP_TERMS: 軸の値ごとに、一致した単位の中で特徴的な語（比較対象は一致した単位全体）
     with st.spinner("軸ごとの共起語を解析中…"):
-        all_fg = units.token_sets(texts, fg_units, method)
+        all_fg = units.token_sets(texts, fg_units, method, only_hit=True)
         gdf = df[group_cols].iloc[units.first_idx[fg_units]]
         valid = gdf.notna().all(axis=1).to_numpy()
         combos = np.empty(len(fg_units), dtype=object)
