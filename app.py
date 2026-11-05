@@ -300,29 +300,40 @@ def save_history(data: dict) -> None:
     tmp.replace(HISTORY_PATH)
 
 
-def record_search(user: str, query: str, dataset: str, hits: int) -> None:
-    """検索を履歴に記録する。即時検索では1文字ごとに呼ばれるため、
-    直前の語の延長・短縮（入力途中）なら直前の履歴を置き換え、同じ語は先頭に寄せる。"""
+def _entry_key(e: dict) -> tuple:
+    return (e["query"], e.get("query2", ""), e.get("mode", ""))
+
+
+def _is_typing_step(a: tuple, b: tuple) -> bool:
+    """a→b が、同じ欄の入力途中（語の延長・短縮）に当たるか。"""
+    def ext(x: str, y: str) -> bool:
+        return x.startswith(y) or y.startswith(x)
+    return a[2] == b[2] and ((a[1] == b[1] and ext(a[0], b[0])) or (a[0] == b[0] and ext(a[1], b[1])))
+
+
+def record_search(user: str, query: str, query2: str, mode: str, dataset: str, hits: int) -> None:
+    """検索を履歴に記録する（語が2つのときは条件も保存）。即時検索では1文字ごとに呼ばれるため、
+    直前の履歴の入力途中（語の延長・短縮）なら置き換え、同じ検索は先頭に寄せる。"""
+    key = (query, query2, mode if query2 else "")
     data = load_history()
     entries = data["users"].setdefault(user, [])
-    if entries and entries[0]["query"] == query and entries[0]["dataset"] == dataset and entries[0]["hits"] == hits:
+    if entries and _entry_key(entries[0]) == key and entries[0]["dataset"] == dataset and entries[0]["hits"] == hits:
         return
     last = st.session_state.get("_last_recorded")
-    if (
-        last and last[0] == user and entries and entries[0]["query"] == last[1]
-        and (query.startswith(last[1]) or last[1].startswith(query))
-    ):
+    if last and last[0] == user and entries and _entry_key(entries[0]) == last[1] and _is_typing_step(last[1], key):
         entries.pop(0)
-    entries[:] = [e for e in entries if e["query"] != query]
+    entries[:] = [e for e in entries if _entry_key(e) != key]
     entries.insert(0, {
         "query": query,
+        "query2": query2,
+        "mode": key[2],
         "dataset": dataset,
         "hits": hits,
         "at": datetime.now().strftime("%Y-%m-%d %H:%M"),
     })
     del entries[HISTORY_LIMIT:]
     save_history(data)
-    st.session_state["_last_recorded"] = (user, query)
+    st.session_state["_last_recorded"] = (user, key)
 
 
 def clear_history(user: str) -> None:
@@ -341,8 +352,11 @@ def add_user(name: str) -> None:
     st.session_state["new_user_name"] = ""
 
 
-def set_query(query: str) -> None:
+def set_query(query: str, query2: str = "", mode: str = "") -> None:
     st.session_state["query"] = query
+    st.session_state["query2"] = query2
+    if mode and mode in st.session_state.get("_mode_options", []):
+        st.session_state["search_mode"] = mode
 
 
 def meta_html(row: pd.Series) -> str:
@@ -365,26 +379,47 @@ def meta_html(row: pd.Series) -> str:
     return " · ".join(f"{label} {val}".strip() for label, val in items if val and val != "<b></b>")
 
 
-def find_hits(df: pd.DataFrame, text_column: str, query: str) -> np.ndarray:
-    """全行を一括（ベクトル化）で完全一致判定した真偽配列。"""
-    return df[text_column].str.contains(query, regex=False, na=False).to_numpy()
+MODE_AND_ROW = "両方を含む（同じ文）"
+MODE_AND_REPORT = "両方を含む（同じレポート内）"
+MODE_OR = "どちらかを含む"
+
+
+def find_hits(df: pd.DataFrame, text_column: str, terms: list[str], mode: str,
+              report_cols: list[str] | None) -> np.ndarray:
+    """全行を一括（ベクトル化）で完全一致判定した真偽配列。語が2つのときは条件で組み合わせる。
+    「同じレポート内」は、両方の語がレポート内のどこかにあれば、そのレポート内で語を含む行を一致とする。"""
+    col = df[text_column]
+    masks = [col.str.contains(t, regex=False, na=False).to_numpy() for t in terms]
+    if len(masks) == 1:
+        return masks[0]
+    a, b = masks
+    if mode == MODE_OR:
+        return a | b
+    if mode == MODE_AND_ROW or not report_cols:
+        return a & b
+    rid = df.groupby(report_cols, sort=False, observed=True, dropna=False).ngroup().to_numpy()
+    n = int(rid.max()) + 1
+    has_a, has_b = np.zeros(n, bool), np.zeros(n, bool)
+    has_a[rid[a]] = True
+    has_b[rid[b]] = True
+    return (has_a & has_b)[rid] & (a | b)
 
 
 def exact_search(
     df: pd.DataFrame,
     hit: np.ndarray,
     text_column: str,
-    query: str,
+    queries: list[str],
     max_results: int,
     context_chars: int,
 ) -> list[dict]:
-    """ヒットした上位 max_results 件だけ Python でスパン計算・HTML 化する。"""
+    """ヒットした上位 max_results 件だけ Python でスパン計算・HTML 化する（全ての検索語をハイライト）。"""
     subset = df[hit].head(max_results)
     results = []
     for pos in range(len(subset)):
         row = subset.iloc[pos]
         text = str(row[text_column])
-        spans = find_all_literal(text, query)
+        spans = [sp for q in queries for sp in find_all_literal(text, q)]
         if not spans:
             continue
         results.append(
@@ -466,7 +501,7 @@ def sample_positions(positions: np.ndarray, n: int, seed: int = 0) -> np.ndarray
     return np.sort(np.random.default_rng(seed).choice(positions, n, replace=False))
 
 
-def enriched_terms(fg, bg, query, exclude, min_count, top_n, rank_by) -> pd.DataFrame:
+def enriched_terms(fg, bg, queries, exclude, min_count, top_n, rank_by) -> pd.DataFrame:
     """fg（注目する文書群）に多い語を、bg（比較対象）との 2x2 対数尤度比 G² で評価する。"""
     n_fg, n_bg = len(fg), len(bg)
     fg_count, bg_count = Counter(), Counter()
@@ -476,7 +511,7 @@ def enriched_terms(fg, bg, query, exclude, min_count, top_n, rank_by) -> pd.Data
         bg_count.update(t)
     terms = [
         w for w, c in fg_count.items()
-        if c >= min_count and w not in exclude and query not in w and w not in query
+        if c >= min_count and w not in exclude and all(q not in w and w not in q for q in queries)
         and not _RATING_SYMBOL.fullmatch(w)  # 格付記号（AA, BBB- など）は語として扱わない
     ]
     if not terms or n_fg == 0 or n_bg == 0:
@@ -563,9 +598,9 @@ def aggregate_by(df: pd.DataFrame, hit: np.ndarray, columns: list[str]) -> tuple
 
 
 COUNT_SORTS = ["軸の順", "一致率（高い順）", "全体比（高い順）", "標準化残差（絶対値の大きい順）", "一致件数（多い順）"]
-CHART_METRICS = {  # 指標: (表示形式, 中心値。None なら一方向の色)
-    "一致率": ("{:.0%}", None),
+CHART_METRICS = {  # 指標: (表示形式, 中心値。None なら一方向の色)。先頭が既定
     "一致件数": ("{:,.0f}", None),
+    "一致率": ("{:.0%}", None),
     "全文書数": ("{:,.0f}", None),
     "全体比": ("{:.1f}", 1.0),
     "標準化残差": ("{:.1f}", 0.0),
@@ -743,7 +778,46 @@ class Units:
         return out
 
 
-def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, query: str) -> None:
+def term_context_view(df: pd.DataFrame, units: Units, unit_ids: np.ndarray, token_sets: list[frozenset],
+                      term: str, queries: list[str], unit_name: str) -> None:
+    """選んだ語が実際にどんな文で使われているかを、検索フレーズと語の両方をハイライトして表示する。
+    レポート単位のときは、語と検索フレーズが別の文にあっても、同じレポート内の該当文をまとめて出す。"""
+    sel = [int(u) for u, t in zip(unit_ids, token_sets) if term in t]
+    st.markdown(f"#### 「{term}」が使われている文")
+    if not sel:
+        st.info("該当する文がありません。")
+        return
+    keys = list(queries) + [term]
+    texts = df[text_column]
+    cards, shown = [], 0
+    for u in sel:
+        rows = units.order[units.starts[u]: units.starts[u] + units.counts[u]]
+        for pos in sorted(rows):
+            text = str(texts.iloc[pos])
+            spans = [sp for k in keys for sp in find_all_literal(text, k)]
+            if not spans:
+                continue
+            if shown >= max_results:
+                break
+            shown += 1
+            cards.append(
+                f"""
+                <details class="result-card">
+                  <summary>
+                    <div class="meta">{meta_html(df.iloc[pos])}</div>
+                    <div class="result-text">{build_snippet(text, spans, context_chars=context_chars)}</div>
+                  </summary>
+                  <div class="full-text">{build_full_text(text, spans)}</div>
+                </details>
+                """
+            )
+        if shown >= max_results:
+            break
+    st.caption(f"この語を含む{unit_name} {len(sel):,} 件のうち、{shown:,} 件の文を表示（文章をクリックで全文表示）。")
+    st.html("".join(cards))
+
+
+def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[str]) -> None:
     texts = df[text_column]
 
     group_cols = [RATING_COLUMN]
@@ -802,13 +876,20 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, query: str) -> N
         with st.spinner("共起語を解析中…"):
             fg = units.token_sets(texts, fg_units, method)
             bg = units.token_sets(texts, sample_positions(np.arange(units.n), max_docs, seed=1), method)
-            table = enriched_terms(fg, bg, query, exclude, min_count, top_n, rank_by)
+            table = enriched_terms(fg, bg, queries, exclude, min_count, top_n, rank_by)
         st.caption(f"一致した{unit_name} {len(fg_units):,} 件（全 {len(hit_units):,} 件から抽出）を、"
                    f"全{unit_name}の無作為標本 {len(bg):,} 件と比較しています。")
         if table.empty:
             st.info("条件に合う語がありませんでした。最小出現数を下げてみてください。")
             return
-        st.dataframe(table, hide_index=True, width="stretch", column_config=TERM_COLUMN_CONFIG)
+        event = st.dataframe(
+            table, hide_index=True, width="stretch", column_config=TERM_COLUMN_CONFIG,
+            on_select="rerun", selection_mode="single-row", key="term_table",
+        )
+        st.caption("語の行をクリックすると、その語が実際に使われている文を表示します。")
+        if event.selection.rows:
+            term = table["語"].iloc[event.selection.rows[0]]
+            term_context_view(df, units, fg_units, fg, term, queries, unit_name)
         return
 
     # VIEW_GROUP_TERMS: 軸の値ごとに、一致した単位の中で特徴的な語（比較対象は一致した単位全体）
@@ -818,7 +899,7 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, query: str) -> N
         valid = gdf.notna().all(axis=1).to_numpy()
         combos = np.empty(len(fg_units), dtype=object)
         combos[:] = list(zip(*[gdf[c].to_numpy() for c in group_cols]))
-        columns, skipped = {}, []
+        columns, skipped, raw_terms, members = {}, [], {}, {}
         for value in sorted(set(combos[valid]), key=lambda v: combo_key(v, group_cols)):
             idx = np.flatnonzero(valid & np.array([c == value for c in combos]))
             name = combo_label(value)
@@ -826,10 +907,12 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, query: str) -> N
                 skipped.append(f"{name}（{len(idx)}件）")
                 continue
             fg = [all_fg[i] for i in idx]
-            table = enriched_terms(fg, all_fg, query, exclude, min_count, top_n, rank_by)
+            table = enriched_terms(fg, all_fg, queries, exclude, min_count, top_n, rank_by)
             columns[f"{name}（{len(idx)}件）"] = [
                 f"{r.語} ({r.出現文書数})" for r in table.itertuples()
             ] if not table.empty else []
+            raw_terms[f"{name}（{len(idx)}件）"] = list(table["語"]) if not table.empty else []
+            members[f"{name}（{len(idx)}件）"] = idx
     axes_name = " × ".join(group_cols)
     st.caption(
         f"{axes_name}ごとに、一致した{unit_name}（{len(fg_units):,} 件）の中でその区分に特に多い語を表示します。語の後ろの数字は出現数です。"
@@ -846,6 +929,15 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, query: str) -> N
     )
     if skipped:
         st.caption("件数が少ないため省略: " + "、".join(skipped))
+
+    st.markdown("**語の使われ方を見る**")
+    s1, s2 = st.columns(2)
+    col_name = s1.selectbox("区分", list(columns), key="ctx_group")
+    cand = raw_terms.get(col_name, [])
+    if cand:
+        term = s2.selectbox("語", cand, key="ctx_term")
+        idx = members[col_name]
+        term_context_view(df, units, fg_units[idx], [all_fg[i] for i in idx], term, queries, unit_name)
 
 
 VIEW_RESULTS = "検索結果"
@@ -1027,8 +1119,10 @@ def recent_searches(user: str | None) -> None:
 
     def row(i: int, e: dict) -> None:
         c1, c2 = st.columns([3, 5], vertical_alignment="center")
-        c1.button(e["query"], key=f"recent_{i}", on_click=set_query, args=(e["query"],), use_container_width=True)
-        c2.caption(f'{e["at"]} · {e["hits"]:,} 件 · {e["dataset"]}')
+        q2, mode = e.get("query2", ""), e.get("mode", "")
+        label = f'{e["query"]} ＋ {q2}' if q2 else e["query"]
+        c1.button(label, key=f"recent_{i}", on_click=set_query, args=(e["query"], q2, mode), use_container_width=True)
+        c2.caption(f'{e["at"]} · {e["hits"]:,} 件 · {e["dataset"]}' + (f" · {mode}" if q2 and mode else ""))
 
     for i, e in enumerate(entries[:RECENT_SHOWN]):
         row(i, e)
@@ -1043,31 +1137,51 @@ def recent_searches(user: str | None) -> None:
 def search_section(df: pd.DataFrame, dataset: str, user: str | None) -> None:
     # live=True は新しい Streamlit のみ対応（入力中に即検索）。古い版では Enter で検索。
     live_kwargs = {"live": True} if "live" in inspect.signature(st.text_input).parameters else {}
-    query = st.text_input(
+    report_cols = report_key_columns(df)
+    mode_options = [MODE_AND_ROW] + ([MODE_AND_REPORT] if report_cols else []) + [MODE_OR]
+    st.session_state["_mode_options"] = mode_options
+    if st.session_state.get("search_mode") not in mode_options:  # 既定: レポート単位が使えるならそれ
+        st.session_state["search_mode"] = mode_options[1] if report_cols else mode_options[0]
+
+    c1, c2, c3 = st.columns([3, 3, 2], vertical_alignment="bottom")
+    query = c1.text_input(
         "検索フレーズ",
         placeholder="例: 比較的強い",
         help="入力中の文字列を、そのまま完全一致で検索します。",
         key="query",
         **live_kwargs,
     )
+    query2 = c2.text_input(
+        "検索フレーズ2（任意）",
+        placeholder="2つ目の語（空欄なら1語のみ）",
+        help="2つ目の語を入れると、右の条件で組み合わせて検索します。",
+        key="query2",
+        **live_kwargs,
+    )
+    mode = c3.selectbox(
+        "2語の条件", mode_options, key="search_mode", disabled=not (query and query2),
+        help="同じ文: 1つの文に両方が入る / 同じレポート内: 別の文でも、同じレポートに両方が入る。",
+    )
 
     # ユーザー切替直後の再実行では、前のユーザーの検索語を記録しない
     user_unchanged = st.session_state.get("_seen_user") == user
     st.session_state["_seen_user"] = user
 
-    if not query:
+    terms = [t for t in (query, query2) if t]  # どちらか一方だけの入力でも、その1語で検索する
+    if not terms:
         st.write(f"**{len(df):,} 行**を読み込みました。検索語を入力してください。")
         recent_searches(user)
         return
 
-    hit = find_hits(df, text_column, query)
+    hit = find_hits(df, text_column, terms, mode, report_cols)
     total = int(hit.sum())
+    scope = f"「{terms[0]}」と「{terms[1]}」{mode} · " if len(terms) == 2 else ""
 
     if user and user_unchanged:
-        record_search(user, query, dataset, total)
+        record_search(user, terms[0], terms[1] if len(terms) == 2 else "", mode, dataset, total)
 
     if total == 0:
-        st.markdown('<div class="search-meta">完全一致: 全 0 件</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="search-meta">{html.escape(scope)}完全一致: 全 0 件</div>', unsafe_allow_html=True)
         st.info("完全一致する句は見つかりませんでした。")
         return
 
@@ -1077,23 +1191,23 @@ def search_section(df: pd.DataFrame, dataset: str, user: str | None) -> None:
     )
     if view != VIEW_RESULTS:
         st.markdown(
-            f'<div class="search-meta">完全一致: 全 {total:,} 件 / {len(df):,} 文書</div>',
+            f'<div class="search-meta">{html.escape(scope)}完全一致: 全 {total:,} 件 / {len(df):,} 行</div>',
             unsafe_allow_html=True,
         )
-        analysis_view(view, df, hit, query)
+        analysis_view(view, df, hit, terms)
         return
 
     results = exact_search(
         df=df,
         hit=hit,
         text_column=text_column,
-        query=query,
+        queries=terms,
         max_results=max_results,
         context_chars=context_chars,
     )
 
     st.markdown(
-        f'<div class="search-meta">完全一致: 全 {total:,} 件中 {len(results):,} 件表示 · 文章をクリックで全文表示</div>',
+        f'<div class="search-meta">{html.escape(scope)}完全一致: 全 {total:,} 件中 {len(results):,} 件表示 · 文章をクリックで全文表示</div>',
         unsafe_allow_html=True,
     )
 
