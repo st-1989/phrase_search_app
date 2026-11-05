@@ -3,6 +3,7 @@ import inspect
 import io
 import json
 import re
+import sys
 from collections import Counter
 import unicodedata
 from datetime import datetime
@@ -483,14 +484,19 @@ def _tokens_janome(text: str) -> frozenset:
     return frozenset(out)
 
 
-def doc_token_sets(texts, method: str) -> list[frozenset]:
+def doc_token_sets(texts, method: str, remove: tuple = ()) -> list[frozenset]:
+    """文ごとの語の集合。remove の語（検索フレーズ）は先に取り除く。
+    これで「比較的高水準」から「比較的」で検索したとき、「高水準」が共起語として取れる。"""
     memo = _token_memo()
     fn = _tokens_janome if method == TOKENIZER_JANOME else _tokens_fast
     out = []
     for text in texts:
-        key = (method, hash(text))
+        key = (method, hash(text), remove)
         if key not in memo:
-            memo[key] = fn(text)
+            t = str(text)
+            for q in remove:
+                t = t.replace(q, " ")
+            memo[key] = fn(t)
         out.append(memo[key])
     return out
 
@@ -767,14 +773,14 @@ class Units:
         return df[columns].iloc[self.first_idx].reset_index(drop=True)
 
     def token_sets(self, texts: pd.Series, units: np.ndarray, method: str,
-                   only_hit: bool = False) -> list[frozenset]:
+                   only_hit: bool = False, remove: tuple = ()) -> list[frozenset]:
         """指定した単位の語の集合（レポートは所属する行の語の和集合）。
         only_hit=True なら、検索語を含む文（行）の語だけを数える＝同じ文の中での共起に限る。"""
         pos = [self.order[self.starts[u]: self.starts[u] + self.counts[u]] for u in units]
         if only_hit:
             pos = [p[self.row_hit[p]] for p in pos]
         flat = np.concatenate(pos) if pos else np.array([], int)
-        toks = doc_token_sets(texts.iloc[flat], method)
+        toks = doc_token_sets(texts.iloc[flat], method, remove)
         out, i = [], 0
         for p in pos:
             group = toks[i: i + len(p)]
@@ -874,13 +880,14 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[st
     if _JanomeTokenizer is None:
         st.caption("Janome が未インストールのため高速モードのみ利用できます（`pip install janome` で形態素解析が使えます）。")
 
+    remove = tuple(sorted(queries, key=len, reverse=True))  # 検索フレーズは取り除いて語を切り出す
     hit_units = np.flatnonzero(units.hit)
     fg_units = sample_positions(hit_units, max_docs)
 
     if view == VIEW_TERMS:
         with st.spinner("共起語を解析中…"):
-            fg = units.token_sets(texts, fg_units, method, only_hit=True)
-            bg = units.token_sets(texts, sample_positions(np.arange(units.n), max_docs, seed=1), method)
+            fg = units.token_sets(texts, fg_units, method, only_hit=True, remove=remove)
+            bg = units.token_sets(texts, sample_positions(np.arange(units.n), max_docs, seed=1), method, remove=remove)
             table = enriched_terms(fg, bg, queries, exclude, min_count, top_n, rank_by)
         st.caption(f"一致した{unit_name} {len(fg_units):,} 件（全 {len(hit_units):,} 件から抽出）を、"
                    f"全{unit_name}の無作為標本 {len(bg):,} 件と比較しています。")
@@ -899,7 +906,7 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[st
 
     # VIEW_GROUP_TERMS: 軸の値ごとに、一致した単位の中で特徴的な語（比較対象は一致した単位全体）
     with st.spinner("軸ごとの共起語を解析中…"):
-        all_fg = units.token_sets(texts, fg_units, method, only_hit=True)
+        all_fg = units.token_sets(texts, fg_units, method, only_hit=True, remove=remove)
         gdf = df[group_cols].iloc[units.first_idx[fg_units]]
         valid = gdf.notna().all(axis=1).to_numpy()
         combos = np.empty(len(fg_units), dtype=object)
@@ -1080,7 +1087,8 @@ with st.sidebar:
 
     st.header("設定")
     context_chars = st.slider("前後の表示文字数", 10, 120, 45, 5)
-    max_results = st.slider("最大表示件数", 10, 500, 100, 10)
+    show_all = st.checkbox("全件表示", value=True, help="オフにすると、表示件数の上限を指定できます（件数が多いと重くなります）。")
+    max_results = sys.maxsize if show_all else st.slider("最大表示件数", 10, 2000, 100, 10)
 
     st.subheader("絞り込み")
     mask = None  # 絞り込みが無いときは df をコピーしない
