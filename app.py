@@ -115,6 +115,7 @@ EXPECTED_COLUMNS = [
     "公表日(業務)", "発行体格付(業務)", "格付の方向性(業務)", "格付アクション(業務)", "タグ", TEXT_COLUMN,
 ]
 # 複数選択で絞り込む列（サイドバー）。年は範囲スライダーで指定する。
+DEFAULT_YEAR_FROM, DEFAULT_YEAR_TO = 2016, 2026  # 年スライダーの初期範囲
 MULTI_FILTER_COLUMNS = ["業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)", "格付アクション(業務)"]
 
 # 巨大ファイル対策: 変換済みデータ（Parquet）の保存先
@@ -1045,8 +1046,8 @@ html, body, .stApp,
 ui = current_ui()
 st.markdown(font_css(ui) + CSS, unsafe_allow_html=True)
 
-st.title("Japanese Phrase Search")
-st.caption(f"CSV / Excel の「{TEXT_COLUMN}」列から、入力した日本語フレーズの完全一致をリアルタイム検索します。")
+# st.title("Japanese Phrase Search")
+# st.caption(f"CSV / Excel の「{TEXT_COLUMN}」列から、入力した日本語フレーズの完全一致をリアルタイム検索します。")
 
 local_files = list_local_files()
 dataset_labels = {str(path.relative_to(APP_DIR)): path for path in local_files}
@@ -1113,7 +1114,10 @@ with st.sidebar:
     if YEAR_COLUMN in df.columns and df[YEAR_COLUMN].notna().any():
         year_min, year_max = int(df[YEAR_COLUMN].min()), int(df[YEAR_COLUMN].max())
         if year_min < year_max:
-            year_range = st.slider(YEAR_COLUMN, year_min, year_max, (year_min, year_max))
+            default_lo, default_hi = max(year_min, DEFAULT_YEAR_FROM), min(year_max, DEFAULT_YEAR_TO)
+            if default_lo > default_hi:  # データが既定の範囲外なら全期間
+                default_lo, default_hi = year_min, year_max
+            year_range = st.slider(YEAR_COLUMN, year_min, year_max, (default_lo, default_hi))
             if year_range != (year_min, year_max):
                 mask = df[YEAR_COLUMN].between(*year_range).fillna(False).to_numpy()
         else:
