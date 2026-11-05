@@ -198,6 +198,14 @@ def normalize_text(text: str, use_nfkc: bool, ignore_spaces: bool) -> str:
     return text
 
 
+def mask_excluded(text: str, phrases) -> str:
+    """除外フレーズに当たる部分を同じ長さの \\x00 に置き換える（位置はずらさない）。
+    例: 「強固」を検索して「比較的強固」を除外すると、「比較的強固」の中の「強固」は一致しない。"""
+    for ph in sorted(phrases, key=len, reverse=True):
+        text = text.replace(ph, "\x00" * len(ph))
+    return text
+
+
 def find_all_literal(text: str, query: str) -> list[tuple[int, int]]:
     if not query:
         return []
@@ -386,10 +394,12 @@ MODE_OR = "どちらかを含む"
 
 
 def find_hits(df: pd.DataFrame, text_column: str, terms: list[str], mode: str,
-              report_cols: list[str] | None) -> np.ndarray:
+              report_cols: list[str] | None, excl: tuple = ()) -> np.ndarray:
     """全行を一括（ベクトル化）で完全一致判定した真偽配列。語が2つのときは条件で組み合わせる。
     「同じレポート内」は、両方の語がレポート内のどこかにあれば、そのレポート内で語を含む行を一致とする。"""
     col = df[text_column]
+    for ph in sorted(excl, key=len, reverse=True):  # 除外フレーズの部分は一致させない
+        col = col.str.replace(ph, "\x00" * len(ph), regex=False)
     masks = [col.str.contains(t, regex=False, na=False).to_numpy() for t in terms]
     if len(masks) == 1:
         return masks[0]
@@ -413,6 +423,7 @@ def exact_search(
     queries: list[str],
     max_results: int,
     context_chars: int,
+    excl: tuple = (),
 ) -> list[dict]:
     """ヒットした上位 max_results 件だけ Python でスパン計算・HTML 化する（全ての検索語をハイライト）。"""
     subset = df[hit].head(max_results)
@@ -420,7 +431,8 @@ def exact_search(
     for pos in range(len(subset)):
         row = subset.iloc[pos]
         text = str(row[text_column])
-        spans = [sp for q in queries for sp in find_all_literal(text, q)]
+        masked = mask_excluded(text, excl)
+        spans = [sp for q in queries for sp in find_all_literal(masked, q)]
         if not spans:
             continue
         results.append(
@@ -484,16 +496,18 @@ def _tokens_janome(text: str) -> frozenset:
     return frozenset(out)
 
 
-def doc_token_sets(texts, method: str, remove: tuple = ()) -> list[frozenset]:
+def doc_token_sets(texts, method: str, remove: tuple = (), mask: tuple = ()) -> list[frozenset]:
     """文ごとの語の集合。remove の語（検索フレーズ）は先に取り除く。
     これで「比較的高水準」から「比較的」で検索したとき、「高水準」が共起語として取れる。"""
     memo = _token_memo()
     fn = _tokens_janome if method == TOKENIZER_JANOME else _tokens_fast
     out = []
     for text in texts:
-        key = (method, hash(text), remove)
+        key = (method, hash(text), remove, mask)
         if key not in memo:
             t = str(text)
+            for ph in mask:  # 除外フレーズは語の切り出しからも外す
+                t = t.replace(ph, " ")
             for q in remove:
                 t = t.replace(q, " ")
             memo[key] = fn(t)
@@ -773,14 +787,14 @@ class Units:
         return df[columns].iloc[self.first_idx].reset_index(drop=True)
 
     def token_sets(self, texts: pd.Series, units: np.ndarray, method: str,
-                   only_hit: bool = False, remove: tuple = ()) -> list[frozenset]:
+                   only_hit: bool = False, remove: tuple = (), mask: tuple = ()) -> list[frozenset]:
         """指定した単位の語の集合（レポートは所属する行の語の和集合）。
         only_hit=True なら、検索語を含む文（行）の語だけを数える＝同じ文の中での共起に限る。"""
         pos = [self.order[self.starts[u]: self.starts[u] + self.counts[u]] for u in units]
         if only_hit:
             pos = [p[self.row_hit[p]] for p in pos]
         flat = np.concatenate(pos) if pos else np.array([], int)
-        toks = doc_token_sets(texts.iloc[flat], method, remove)
+        toks = doc_token_sets(texts.iloc[flat], method, remove, mask)
         out, i = [], 0
         for p in pos:
             group = toks[i: i + len(p)]
@@ -790,7 +804,7 @@ class Units:
 
 
 def term_context_view(df: pd.DataFrame, units: Units, unit_ids: np.ndarray, token_sets: list[frozenset],
-                      term: str, queries: list[str], unit_name: str) -> None:
+                      term: str, queries: list[str], unit_name: str, excl: tuple = ()) -> None:
     """選んだ語が実際にどんな文で使われているかを、検索フレーズと語の両方をハイライトして表示する。
     共起は1つの文の中に限る（検索フレーズと語が同じ文にある文だけを出す）。"""
     sel = [int(u) for u, t in zip(unit_ids, token_sets) if term in t]
@@ -805,8 +819,9 @@ def term_context_view(df: pd.DataFrame, units: Units, unit_ids: np.ndarray, toke
         rows = units.order[units.starts[u]: units.starts[u] + units.counts[u]]
         for pos in sorted(rows):
             text = str(texts.iloc[pos])
-            spans = [sp for k in keys for sp in find_all_literal(text, k)]
-            if not spans or term not in text or not any(q in text for q in queries):
+            masked = mask_excluded(text, excl)
+            spans = [sp for k in keys for sp in find_all_literal(masked, k)]
+            if not spans or term not in masked or not any(q in masked for q in queries):
                 continue  # 検索フレーズと語が同じ文にあるものだけ
             if shown >= max_results:
                 break
@@ -828,7 +843,7 @@ def term_context_view(df: pd.DataFrame, units: Units, unit_ids: np.ndarray, toke
     st.html("".join(cards))
 
 
-def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[str]) -> None:
+def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[str], excl: tuple = ()) -> None:
     texts = df[text_column]
 
     group_cols = [RATING_COLUMN]
@@ -871,11 +886,13 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[st
         method = c1.selectbox("語の切り出し", methods, key="tok_method",
                               help="Janome は精度が高い反面、遅いです。初回の解析結果は記憶されます。")
         rank_by = c2.selectbox("並び順", [RANK_BY_SCORE, RANK_BY_COUNT], key="rank_by")
-        top_n = c3.slider("表示する語数", 10, 100, 30, 5, key="top_n")
+        all_terms = c3.checkbox("語を全て表示", value=True, key="all_terms")
+        top_n = sys.maxsize if all_terms else c3.slider("表示する語数", 10, 500, 30, 5, key="top_n")
         min_count = c4.slider("最小出現数", 1, 20, 3, key="min_count",
                               help="その語を含む（文／レポート）の数の下限です。")
-        max_docs = c1.slider("分析に使う最大件数", 100, 3000, 500, 100, key="max_docs",
-                             help="一致・比較対象それぞれ、この件数まで無作為に抽出して解析します。")
+        all_docs = c1.checkbox("全件を分析に使う", value=True, key="all_docs",
+                               help="オフにすると、一致・比較対象それぞれ、指定した件数まで無作為に抽出して解析します（速くなります）。")
+        max_docs = sys.maxsize if all_docs else c1.slider("分析に使う最大件数", 100, 3000, 500, 100, key="max_docs")
         exclude = set(c2.text_input("除外する語（スペース区切り）", key="exclude").split())
     if _JanomeTokenizer is None:
         st.caption("Janome が未インストールのため高速モードのみ利用できます（`pip install janome` で形態素解析が使えます）。")
@@ -886,8 +903,8 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[st
 
     if view == VIEW_TERMS:
         with st.spinner("共起語を解析中…"):
-            fg = units.token_sets(texts, fg_units, method, only_hit=True, remove=remove)
-            bg = units.token_sets(texts, sample_positions(np.arange(units.n), max_docs, seed=1), method, remove=remove)
+            fg = units.token_sets(texts, fg_units, method, only_hit=True, remove=remove, mask=excl)
+            bg = units.token_sets(texts, sample_positions(np.arange(units.n), max_docs, seed=1), method, remove=remove, mask=excl)
             table = enriched_terms(fg, bg, queries, exclude, min_count, top_n, rank_by)
         st.caption(f"一致した{unit_name} {len(fg_units):,} 件（全 {len(hit_units):,} 件から抽出）を、"
                    f"全{unit_name}の無作為標本 {len(bg):,} 件と比較しています。")
@@ -901,12 +918,12 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[st
         st.caption("語の行をクリックすると、その語が実際に使われている文を表示します。")
         if event.selection.rows:
             term = table["語"].iloc[event.selection.rows[0]]
-            term_context_view(df, units, fg_units, fg, term, queries, unit_name)
+            term_context_view(df, units, fg_units, fg, term, queries, unit_name, excl)
         return
 
     # VIEW_GROUP_TERMS: 軸の値ごとに、一致した単位の中で特徴的な語（比較対象は一致した単位全体）
     with st.spinner("軸ごとの共起語を解析中…"):
-        all_fg = units.token_sets(texts, fg_units, method, only_hit=True, remove=remove)
+        all_fg = units.token_sets(texts, fg_units, method, only_hit=True, remove=remove, mask=excl)
         gdf = df[group_cols].iloc[units.first_idx[fg_units]]
         valid = gdf.notna().all(axis=1).to_numpy()
         combos = np.empty(len(fg_units), dtype=object)
@@ -949,7 +966,7 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[st
     if cand:
         term = s2.selectbox("語", cand, key="ctx_term")
         idx = members[col_name]
-        term_context_view(df, units, fg_units[idx], [all_fg[i] for i in idx], term, queries, unit_name)
+        term_context_view(df, units, fg_units[idx], [all_fg[i] for i in idx], term, queries, unit_name, excl)
 
 
 VIEW_RESULTS = "検索結果"
@@ -1180,13 +1197,18 @@ def search_section(df: pd.DataFrame, dataset: str, user: str | None) -> None:
     user_unchanged = st.session_state.get("_seen_user") == user
     st.session_state["_seen_user"] = user
 
+    excl = tuple(st.text_input(
+        "除外フレーズ（任意・スペース区切り）", placeholder="例: 比較的強固（「強固」で検索したとき、「比較的強固」の中の「強固」を除く）",
+        help="ここに入れた語に含まれる部分は、検索の一致として数えません。1つの文に除外フレーズと単独の一致が両方あれば、単独の方は一致します。",
+        key="exclude_phrase",
+    ).split())
     terms = [t for t in (query, query2) if t]  # どちらか一方だけの入力でも、その1語で検索する
     if not terms:
         st.write(f"**{len(df):,} 行**を読み込みました。検索語を入力してください。")
         recent_searches(user)
         return
 
-    hit = find_hits(df, text_column, terms, mode, report_cols)
+    hit = find_hits(df, text_column, terms, mode, report_cols, excl)
     total = int(hit.sum())
     scope = f"「{terms[0]}」と「{terms[1]}」{mode} · " if len(terms) == 2 else ""
 
@@ -1207,7 +1229,7 @@ def search_section(df: pd.DataFrame, dataset: str, user: str | None) -> None:
             f'<div class="search-meta">{html.escape(scope)}完全一致: 全 {total:,} 件 / {len(df):,} 行</div>',
             unsafe_allow_html=True,
         )
-        analysis_view(view, df, hit, terms)
+        analysis_view(view, df, hit, terms, excl)
         return
 
     results = exact_search(
@@ -1217,6 +1239,7 @@ def search_section(df: pd.DataFrame, dataset: str, user: str | None) -> None:
         queries=terms,
         max_results=max_results,
         context_chars=context_chars,
+        excl=excl,
     )
 
     st.markdown(
