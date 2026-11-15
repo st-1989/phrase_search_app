@@ -4,3 +4,5 @@ openpyxl>=3.1
 xlrd>=2.0
 pyarrow>=15
 janome>=0.5
+fastapi>=0.110
+uvicorn>=0.29
