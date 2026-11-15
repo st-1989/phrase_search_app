@@ -3,255 +3,297 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Japanese Phrase Search</title>
+<title>Phrase Search</title>
 <style>
+/* 落ち着いた配色・強調は一致箇所だけ・レイアウトを動かさない（web/ の React 版と同じデザイン） */
 :root {
-  --bg: #ffffff;
-  --side-bg: #f4f5f7;
-  --text: #1f2328;
-  --muted: #a0a0a0;
-  --subtle: #6b7280;
-  --border: rgba(128, 128, 128, 0.3);
-  --accent: #2563eb;
-  --accent-text: #ffffff;
-  --field-bg: #ffffff;
-  --warn-bg: #fff7e0;
-  --info-bg: #eaf2ff;
-  --err-bg: #fdecec;
-  --font-size: 16px;
-  --font: "BIZ UDPGothic", "Hiragino Sans", "Yu Gothic", Meiryo, sans-serif;
+  --font: "BIZ UDPGothic";
+  --font-size: 18px;
+  --bg: #f7f7f5;
+  --surface: #ffffff;
+  --text: #1c1c1e;
+  --muted: #7b7b80;
+  --ctx: #8e8e93;
+  --faint: #c2c2c6;
+  --border: #e4e4e0;
+  --accent: #3554c8;
+  --accent-soft: #eef1fd;
+  --mark0: #ffe9a3;
+  --mark1: #cfe6ff;
+  --active: #f3f5ff;
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --warn: #fff4d6;
+  color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1117;
-    --side-bg: #1a1d24;
-    --text: #e6e6e6;
-    --muted: #7d8088;
-    --subtle: #9aa0aa;
-    --field-bg: #11141a;
-    --warn-bg: #3a3320;
-    --info-bg: #1b2a44;
-    --err-bg: #3d1f1f;
-    --accent: #5b8def;
+  :root:not([data-theme="light"]) {
+    --bg: #141416; --surface: #1c1c1f; --text: #ececef; --muted: #94949b; --ctx: #85858c;
+    --faint: #4a4a50; --border: #2d2d32; --accent: #8ea2ff; --accent-soft: #23284a;
+    --mark0: rgba(255, 204, 0, 0.3); --mark1: rgba(90, 160, 255, 0.32); --active: #22243a;
+    --shadow: 0 8px 28px rgba(0, 0, 0, 0.5); --warn: #3a3320; color-scheme: dark;
   }
 }
+:root[data-theme="dark"] {
+  --bg: #141416; --surface: #1c1c1f; --text: #ececef; --muted: #94949b; --ctx: #85858c;
+  --faint: #4a4a50; --border: #2d2d32; --accent: #8ea2ff; --accent-soft: #23284a;
+  --mark0: rgba(255, 204, 0, 0.3); --mark1: rgba(90, 160, 255, 0.32); --active: #22243a;
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.5); --warn: #3a3320; color-scheme: dark;
+}
+
 * { box-sizing: border-box; }
-html { font-size: var(--font-size); }
+html, body { height: 100%; margin: 0; }
 body {
-  margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font);
+  font-family: var(--font), "Hiragino Sans", "Yu Gothic", Meiryo, system-ui, sans-serif;
+  font-size: var(--font-size);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
 }
-button, input, select { font-family: inherit; font-size: 0.95rem; color: var(--text); }
-#app { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 100vh; }
-aside {
-  background: var(--side-bg);
-  padding: 1.2rem 1rem 3rem;
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
-  max-height: 100vh;
-  position: sticky;
-  top: 0;
-}
-main { padding: 2rem 2rem 4rem; max-width: 1200px; width: 100%; }
-@media (max-width: 800px) {
-  #app { grid-template-columns: 1fr; }
-  aside { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--border); }
-  main { padding: 1rem 1rem 3rem; }
-}
-aside h2 { font-size: 1.15rem; margin: 1.2rem 0 0.5rem; }
-aside h2:first-child { margin-top: 0; }
-aside h3 { font-size: 1rem; margin: 1rem 0 0.4rem; }
-.field { margin-bottom: 0.8rem; }
-.field > label, .field > .lbl { display: block; font-size: 0.85rem; color: var(--subtle); margin-bottom: 0.25rem; }
-input[type=text], input[type=number], select {
-  width: 100%;
-  padding: 0.45rem 0.6rem;
-  background: var(--field-bg);
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: 0; padding: 0; }
+kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72em;
+  padding: 0.05em 0.45em;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  color: var(--muted);
+  background: var(--surface);
 }
-input[type=text]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-input:disabled, select:disabled { opacity: 0.5; }
-input[type=range] { width: 100%; }
-button {
-  padding: 0.4rem 0.8rem;
-  background: var(--field-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-}
-button:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-.row { display: flex; gap: 0.8rem; align-items: flex-end; }
-.row > .field { flex: 1 1 0; min-width: 0; margin-bottom: 0.6rem; }
-.row > .field.narrow { flex: 0 0 22%; min-width: 11rem; }
-@media (max-width: 800px) { .row { flex-wrap: wrap; } .row > .field { flex-basis: 100%; } }
-.range-val { float: right; color: var(--text); }
-.year-row { display: flex; gap: 0.5rem; align-items: center; }
-.year-row span { color: var(--subtle); }
-.check { display: flex; gap: 0.5rem; align-items: center; font-size: 0.95rem; }
-.caption { color: var(--subtle); font-size: 0.85rem; margin: 0.3rem 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+[hidden], .hidden { display: none !important; }
 
-details.ms { margin-bottom: 0.7rem; }
-details.ms > summary {
-  list-style: none;
-  cursor: pointer;
-  padding: 0.45rem 0.6rem;
-  background: var(--field-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 0.9rem;
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-details.ms > summary::-webkit-details-marker { display: none; }
-details.ms .badge { color: var(--accent); font-weight: 700; }
-.ms-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px; background: var(--field-bg); padding: 0.4rem; }
-.ms-body input[type=text] { margin-bottom: 0.4rem; }
-.ms-list { max-height: 14rem; overflow-y: auto; }
-.ms-list label { display: flex; gap: 0.5rem; align-items: center; padding: 0.15rem 0.2rem; font-size: 0.9rem; cursor: pointer; }
-.ms-list label.hidden { display: none; }
-.ms-clear { margin-top: 0.4rem; font-size: 0.8rem; padding: 0.2rem 0.5rem; }
+.app { display: flex; flex-direction: column; height: 100%; }
+.spacer { flex: 1; }
+.muted { color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+.error { color: #c62828; }
+.link { color: var(--accent); font-size: 0.85em; }
+.link:hover { text-decoration: underline; }
 
-.databar { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; margin-bottom: 1.2rem; }
-.databar .name { font-weight: 600; }
-.databar .meta { color: var(--subtle); font-size: 0.9rem; }
-#dropzone {
-  border: 2px dashed var(--border);
-  border-radius: 10px;
-  padding: 2.5rem 1rem;
-  text-align: center;
-  color: var(--subtle);
-  cursor: pointer;
-  margin-bottom: 1.5rem;
-}
-#dropzone.over { border-color: var(--accent); color: var(--text); }
-#dropzone b { color: var(--text); }
-.notice { padding: 0.7rem 0.9rem; border-radius: 8px; margin: 0.6rem 0; font-size: 0.95rem; }
-.notice.info { background: var(--info-bg); }
-.notice.warn { background: var(--warn-bg); }
-.notice.err { background: var(--err-bg); }
-progress { width: 100%; height: 0.5rem; }
+/* ---- 上部バー（主張しない） ---- */
+.topbar { display: flex; align-items: center; gap: 0.9rem; padding: 0.55rem 1.25rem; font-size: 0.8em; color: var(--muted); }
+.brand { font-weight: 700; color: var(--text); letter-spacing: 0.01em; }
+.data-label { min-width: 0; max-width: 50vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar .link, .brand { white-space: nowrap; flex: none; }
 
-.search-meta { color: var(--subtle); font-size: 0.95rem; margin: 0.2rem 0 0.8rem 0; }
-.result-card { padding: 0.4rem 0.1rem; border-bottom: 1px solid var(--border); }
-.result-text { font-size: 1.05rem; line-height: 1.65; word-break: break-word; }
-.context { color: var(--muted); }
-.match { color: var(--text); font-weight: 700; }
-.ellipsis { color: var(--muted); }
-details.result-card > summary { list-style: none; cursor: pointer; }
-details.result-card > summary::-webkit-details-marker { display: none; }
-details.result-card > summary:hover .context { color: #808080; }
-.meta { color: var(--subtle); font-size: 0.88rem; margin-bottom: 0.15rem; }
-.meta b { color: var(--text); font-weight: 600; }
-.full-text {
-  margin-top: 0.4rem;
-  padding: 0.5rem 0.8rem;
-  background: rgba(128, 128, 128, 0.08);
-  border-left: 3px solid var(--border);
-  font-size: 1rem;
-  line-height: 1.7;
-  word-break: break-word;
+.main { flex: 1; min-height: 0; display: flex; flex-direction: column; width: 100%; max-width: 1040px; margin: 0 auto; padding: 0 1.25rem; }
+
+/* ---- 検索欄（画面の主役） ---- */
+.search { padding-top: 0.75rem; }
+.search-row {
+  display: flex; align-items: center; gap: 0.6rem;
+  background: var(--surface); border: 1.5px solid var(--border); border-radius: 14px;
+  padding: 0 0.9rem; height: 3.4em; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); transition: border-color 0.12s;
 }
-.more { margin: 1rem 0; display: flex; gap: 0.6rem; }
-hr { border: none; border-top: 1px solid var(--border); margin: 1.6rem 0 1rem; }
-#recent h3 { margin: 0 0 0.6rem; font-size: 1.15rem; }
-.recent-row { display: grid; grid-template-columns: minmax(8rem, 3fr) 5fr; gap: 0.8rem; align-items: center; margin-bottom: 0.4rem; }
-.recent-row button { text-align: left; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent-row .caption { margin: 0; }
-@media (max-width: 800px) { .recent-row { grid-template-columns: 1fr; gap: 0.1rem; margin-bottom: 0.8rem; } }
-.hidden { display: none !important; }
+.search-row:focus-within { border-color: var(--accent); }
+.search-icon { color: var(--muted); flex: none; }
+.search-input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 1.3em; height: 100%; }
+.search-input::placeholder { color: var(--faint); }
+.kbd-hint { flex: none; }
+.search-row:focus-within .kbd-hint { visibility: hidden; }
+
+.icon-btn { display: inline-grid; place-items: center; width: 1.9em; height: 1.9em; border-radius: 8px; color: var(--muted); flex: none; font-size: 0.95em; }
+.icon-btn:hover { background: var(--accent-soft); color: var(--text); }
+.icon-btn.faint { color: var(--faint); }
+
+.sub-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.5rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.9rem; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 10px; font-size: 0.9em;
+}
+.sub-row:focus-within { border-color: var(--accent); }
+.sub-label { color: var(--muted); white-space: nowrap; font-size: 0.9em; }
+.sub-input { flex: 1; min-width: 8em; border: 0; outline: 0; background: transparent; padding: 0.25rem 0; }
+.sub-help { color: var(--muted); font-size: 0.8em; }
+
+.segmented { display: inline-flex; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 2px; font-size: 0.85em; }
+.segmented button { padding: 0.2rem 0.7rem; border-radius: 6px; color: var(--muted); white-space: nowrap; }
+.segmented button.on { background: var(--surface); color: var(--text); font-weight: 700; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
+.segmented.small { font-size: 0.9em; }
+
+/* ---- 絞り込み（いつも見える。有効なものは色が付く） ---- */
+.chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.7rem; font-size: 0.82em; }
+.chip { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--muted); white-space: nowrap; }
+.chip.ghost, .chip.link { padding: 0.18rem 0.75rem; }
+.chip.ghost { border-style: dashed; }
+.chip.ghost:hover { color: var(--text); border-color: var(--muted); }
+.chip.link { border: 0; background: none; color: var(--accent); }
+.chip-main { padding: 0.18rem 0.75rem; display: inline-flex; gap: 0.25rem; align-items: center; }
+.chip:hover { border-color: var(--muted); }
+.chip.active { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.chip.active .chip-main { padding-right: 0.25rem; }
+.chip-x { padding: 0 0.6rem 0 0.2rem; opacity: 0.7; }
+.chip-x:hover { opacity: 1; }
+.caret { font-size: 0.75em; opacity: 0.6; }
+.divider { width: 1px; height: 1.2em; background: var(--border); margin: 0 0.2rem; }
+
+.pop-anchor { position: relative; }
+.popover {
+  position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; min-width: 14rem; max-width: 22rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); padding: 0.5rem; font-size: 0.95rem; color: var(--text);
+}
+.popover.right { left: auto; right: 0; }
+.pop-find { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 0.3rem 0.55rem; background: var(--bg); margin-bottom: 0.35rem; outline: 0; }
+.pop-list { max-height: 18rem; overflow: auto; }
+.pop-item { display: flex; align-items: center; gap: 0.55rem; padding: 0.3rem 0.45rem; border-radius: 6px; cursor: pointer; }
+.pop-item:hover { background: var(--bg); }
+.pop-item input { accent-color: var(--accent); width: 1rem; height: 1rem; }
+.pop-foot { display: flex; justify-content: space-between; padding: 0.4rem 0.35rem 0.1rem; border-top: 1px solid var(--border); margin-top: 0.35rem; }
+
+.year-pop { min-width: 17rem; }
+.year-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.2rem 0.2rem 0.5rem; }
+.year-row select { flex: 1; padding: 0.25rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.year-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; }
+.year-grid button { padding: 0.25rem 0; border-radius: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.year-grid button.in { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.year-grid button:hover { outline: 1px solid var(--border); }
+
+.settings { display: grid; gap: 0.8rem; padding: 0.8rem; min-width: 16rem; }
+.settings label { display: grid; gap: 0.3rem; font-size: 0.88rem; color: var(--muted); }
+.settings label b { color: var(--text); }
+.settings input[type="range"] { accent-color: var(--accent); }
+.settings select { padding: 0.3rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+
+/* ---- 件数の行（高さ固定でガタつかない） ---- */
+.status {
+  display: flex; align-items: baseline; gap: 0.35rem; min-height: 2.6em;
+  padding: 0.9rem 0.2rem 0.4rem; border-bottom: 1px solid var(--border); font-size: 0.9em;
+}
+.status .big { font-size: 1.35em; }
+.status .pill { margin-left: 0.5rem; font-size: 0.8em; padding: 0.05rem 0.55rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.status .hint { font-size: 0.78em; color: var(--muted); display: inline-flex; gap: 0.35rem; align-items: center; }
+.notice { margin: 0.6rem 0 0; padding: 0.5rem 0.8rem; border-radius: 8px; background: var(--warn); font-size: 0.85em; }
+.notice.err { background: rgba(198, 40, 40, 0.12); color: #c62828; }
+
+/* ---- 結果（見えている行だけを描画する） ---- */
+.results { flex: 1; min-height: 0; overflow-y: auto; outline: 0; margin: 0 -0.6rem; padding: 0 0.6rem 3rem; }
+.sizer { position: relative; }
+.card {
+  position: absolute; top: 0; left: 0; width: 100%; padding: 0.75rem 0.9rem 0.8rem;
+  border-bottom: 1px solid var(--border); border-left: 3px solid transparent; cursor: pointer;
+}
+.card:hover { background: var(--surface); }
+.card.active { background: var(--active); border-left-color: var(--accent); }
+.meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.15rem 0.6rem; font-size: 0.78em; color: var(--muted); margin-bottom: 0.2rem; }
+.issuer { color: var(--text); font-weight: 700; font-size: 1.08em; }
+.rating { font-variant-numeric: tabular-nums; color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 0 0.4rem; font-size: 0.95em; }
+.snippet { margin: 0; line-height: 1.75; word-break: break-word; }
+.snippet .ctx { color: var(--ctx); }
+.snippet.full { margin-top: 0.4rem; padding: 0.6rem 0.85rem; background: var(--surface); border-radius: 8px; border: 1px solid var(--border); }
+.snippet.full .ctx { color: var(--text); opacity: 0.8; }
+mark { color: var(--text); font-weight: 700; border-radius: 3px; padding: 0 1px; }
+mark.t0 { background: var(--mark0); }
+mark.t1 { background: var(--mark1); }
+
+/* ---- 読み込み・最近の検索・空の状態 ---- */
+.dropzone {
+  margin: 1.2rem 0; padding: 3rem 1rem; text-align: center; border: 2px dashed var(--border);
+  border-radius: 14px; color: var(--muted); cursor: pointer;
+}
+.dropzone:hover, .dropzone.over { border-color: var(--accent); color: var(--text); }
+.dropzone b { color: var(--text); }
+.dropzone p { margin: 0.3rem 0; }
+progress { width: 100%; height: 0.4rem; margin-top: 0.4rem; accent-color: var(--accent); }
+.empty { padding: 3rem 0.5rem; text-align: center; }
+.empty p { margin: 0.3rem 0; }
+.recent { padding: 1.2rem 0.2rem; overflow-y: auto; }
+.recent-head { display: flex; justify-content: space-between; align-items: baseline; color: var(--muted); font-size: 0.85em; margin-bottom: 0.4rem; }
+.recent ul { list-style: none; padding: 0; margin: 0; }
+.recent li { display: flex; align-items: center; border-radius: 10px; }
+.recent li:hover { background: var(--surface); }
+.recent-item { flex: 1; display: flex; justify-content: space-between; gap: 1rem; text-align: left; padding: 0.5rem 0.7rem; }
+.recent-q { font-weight: 700; }
+.recent-meta { color: var(--muted); font-size: 0.8em; white-space: nowrap; }
+
+@media (max-width: 640px) {
+  .main, .topbar { padding-left: 1rem; padding-right: 1rem; }
+  .status .hint, .kbd-hint, .sub-help { display: none; }
+}
 </style>
 </head>
 <body>
-<div id="app">
-  <aside>
-    <h2>ユーザー</h2>
-    <div class="field">
-      <label for="userSelect">ユーザーを選択</label>
-      <select id="userSelect"></select>
+<div class="app">
+  <header class="topbar">
+    <span class="brand">Phrase Search</span>
+    <span class="data-label" id="dataLabel"></span>
+    <button class="link" id="openBtn">ファイルを開く</button>
+    <span class="spacer"></span>
+    <div class="pop-anchor" id="settingsAnchor">
+      <button class="icon-btn" id="settingsBtn" aria-label="表示設定" aria-expanded="false">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>
+        </svg>
+      </button>
+      <div class="popover right settings" id="settingsPop" hidden>
+        <label>文字サイズ <b class="num" id="fontSizeVal"></b>
+          <input type="range" id="fontSize" min="14" max="28">
+        </label>
+        <label>前後の表示文字数 <b class="num" id="contextVal"></b>
+          <input type="range" id="context" min="10" max="120" step="5">
+        </label>
+        <label>フォント
+          <select id="fontSel"></select>
+        </label>
+        <div class="segmented small" role="radiogroup" aria-label="テーマ" id="themeSeg">
+          <button data-theme="auto">自動</button>
+          <button data-theme="light">ライト</button>
+          <button data-theme="dark">ダーク</button>
+        </div>
+      </div>
     </div>
-    <div class="field hidden" id="newUserBox">
-      <label for="newUserName">新しいユーザー名</label>
-      <input type="text" id="newUserName">
-      <div style="margin-top:0.4rem"><button id="addUser" disabled>追加</button></div>
-    </div>
+  </header>
 
-    <h2>表示</h2>
-    <div class="field">
-      <label for="fontSelect">フォント</label>
-      <select id="fontSelect"></select>
-    </div>
-    <div class="field">
-      <label for="fontCustom">フォント名</label>
-      <input type="text" id="fontCustom" disabled placeholder="手元にインストール済みのフォント名">
-    </div>
-    <div class="field">
-      <label for="fontSize">文字サイズ [px] <span class="range-val" id="fontSizeVal"></span></label>
-      <input type="range" id="fontSize" min="12" max="32" step="1">
-    </div>
+  <main class="main">
+    <section class="search hidden" id="searchBox">
+      <div class="search-row">
+        <svg class="search-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input class="search-input" id="q" placeholder="フレーズを入力（完全一致）" aria-label="検索フレーズ" spellcheck="false" autocomplete="off">
+        <button class="icon-btn hidden" id="clearQ" aria-label="クリア">×</button>
+        <kbd class="kbd-hint">/</kbd>
+      </div>
 
-    <h2>設定</h2>
-    <div class="field">
-      <label for="ctxChars">前後の表示文字数 <span class="range-val" id="ctxCharsVal"></span></label>
-      <input type="range" id="ctxChars" min="10" max="120" step="5">
-    </div>
-    <div class="field">
-      <label class="check"><input type="checkbox" id="showAll"> 全件表示</label>
-      <div class="caption">オフのときは 100 件ずつ表示します（件数が多いと重くなります）。</div>
-    </div>
+      <div class="sub-row hidden" id="secondRow">
+        <span class="sub-label">＋ 2つ目の語</span>
+        <input class="sub-input" id="q2" placeholder="例: 改善" spellcheck="false" autocomplete="off">
+        <div class="segmented" role="radiogroup" aria-label="2語の条件" id="modeSeg"></div>
+        <button class="icon-btn" id="removeSecond" aria-label="2つ目の語を外す">×</button>
+      </div>
 
-    <h3>絞り込み</h3>
-    <div id="filters"><div class="caption">データを読み込むと表示されます。</div></div>
-    <div class="caption" id="filterCount"></div>
-  </aside>
+      <div class="sub-row hidden" id="exclRow">
+        <span class="sub-label">− 除外</span>
+        <input class="sub-input" id="excl" placeholder="例: 比較的強固（スペース区切りで複数）" spellcheck="false" autocomplete="off">
+        <span class="sub-help">この語の中の一致は数えません</span>
+        <button class="icon-btn" id="removeExcl" aria-label="除外を外す">×</button>
+      </div>
 
-  <main>
-    <div id="dropzone" tabindex="0" role="button">
-      <div><b>Excel（.xlsx）または CSV ファイルをここにドロップ</b>、またはクリックして選択</div>
-      <div class="caption">ファイルはこのブラウザの中だけで読み込まれ、外部には送信されません。</div>
-    </div>
-    <div class="databar hidden" id="databar">
-      <span class="name" id="dataName"></span>
-      <span class="meta" id="dataMeta"></span>
-      <button id="reloadBtn">データを更新</button>
-    </div>
-    <input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv,text/csv" class="hidden">
-    <div id="loading" class="hidden">
-      <div class="caption" id="loadingText">読み込み中…</div>
-      <progress></progress>
-    </div>
+      <div class="chip-row">
+        <button class="chip ghost" id="addSecond">＋ 語を追加</button>
+        <button class="chip ghost" id="addExcl">− 除外</button>
+        <span class="divider"></span>
+        <span id="filterChips" style="display: contents"></span>
+        <button class="chip link hidden" id="clearFilters">絞り込みを全て解除</button>
+      </div>
+    </section>
+
     <div id="notices"></div>
-
-    <div id="searchArea" class="hidden">
-      <div class="row">
-        <div class="field">
-          <label for="q1">検索フレーズ</label>
-          <input type="text" id="q1" placeholder="例: 比較的強い" autocomplete="off">
-        </div>
-        <div class="field">
-          <label for="q2">検索フレーズ2（任意）</label>
-          <input type="text" id="q2" placeholder="2つ目の語（空欄なら1語のみ）" autocomplete="off">
-        </div>
-        <div class="field narrow">
-          <label for="mode">2語の条件</label>
-          <select id="mode" title="同じ文: 1つの文に両方が入る / 同じレポート内: 別の文でも、同じレポートに両方が入る。"></select>
-        </div>
-      </div>
-      <div class="field">
-        <label for="excl">除外フレーズ（任意・スペース区切り）</label>
-        <input type="text" id="excl" placeholder="例: 比較的強固（「強固」で検索したとき、「比較的強固」の中の「強固」を除く）" autocomplete="off">
-      </div>
-      <div id="summary" class="search-meta"></div>
-      <div id="results"></div>
-      <div id="more" class="more hidden"></div>
-      <div id="recent"></div>
+    <div class="dropzone" id="dropzone" tabindex="0" role="button">
+      <p><b>Excel（.xlsx）または CSV ファイルをここにドロップ</b>、またはクリックして選択</p>
+      <p class="muted" style="font-size: 0.85em">ファイルはこのブラウザの中だけで読み込まれ、外部には送信されません。</p>
     </div>
+    <progress id="progress" class="hidden"></progress>
+    <div class="status" id="status" aria-live="polite"></div>
+
+    <div class="results hidden" id="results" tabindex="0" aria-label="検索結果"><div class="sizer" id="sizer"></div></div>
+    <div id="recent"></div>
   </main>
 </div>
+<input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv,text/csv" hidden>
 
 <script>
 "use strict";
@@ -267,44 +309,45 @@ const EXPECTED_COLUMNS = [
   "発行体名(CDEX)", "発行体名(業務)", "業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)",
   "公表日(業務)", RATING_COLUMN, "格付の方向性(業務)", "格付アクション(業務)", "タグ", TEXT_COLUMN,
 ];
-const MULTI_FILTER_COLUMNS = ["業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)", "格付アクション(業務)"];
-const FILTER_COLUMNS = [RATING_COLUMN, ...MULTI_FILTER_COLUMNS];
+const FILTER_COLUMNS = [RATING_COLUMN, "業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)", "格付アクション(業務)"];
+const FILTER_LABELS = {
+  [RATING_COLUMN]: "格付", "業種(業務)": "業種", "担当部署(業務)": "担当部署",
+  "担当アナリスト(CDEX)": "担当", "格付アクション(業務)": "アクション",
+};
 const RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
   "BB+", "BB", "BB-", "B+", "B", "B-", "CCC", "CC", "C", "D"];
 const DEFAULT_YEAR_FROM = 2016, DEFAULT_YEAR_TO = 2026;
 
-const MODE_AND_ROW = "両方を含む（同じ文）";
-const MODE_AND_REPORT = "両方を含む（同じレポート内）";
-const MODE_OR = "どちらかを含む";
-
-const HISTORY_LIMIT = 200;
-const RECENT_SHOWN = 10;
-const DEFAULT_USER = "ゲスト";
-const NEW_USER_OPTION = "＋ 新しいユーザーを追加…";
-const PAGE_STEP = 100;
-const STORAGE_KEY = "phraseSearch.v1";
+const MODES = [
+  { id: "row", label: "同じ文に両方", hint: "1つの文に両方の語が入る" },
+  { id: "report", label: "同じレポートに両方", hint: "別の文でも、同じレポートに両方の語が入る" },
+  { id: "or", label: "どちらか", hint: "どちらか一方でも含む" },
+];
+const FONTS = ["BIZ UDPGothic", "Hiragino Sans", "Yu Gothic", "Meiryo", "BIZ UDPMincho", "Yu Mincho", "system-ui"];
+const DEFAULT_SETTINGS = { fontSize: 18, context: 45, font: "BIZ UDPGothic", theme: "auto" };
+const RECENT_MAX = 30, RECENT_SHOWN = 12;
+const OVERSCAN = 6;
 const DB_NAME = "phraseSearch", DB_STORE = "datasets", DB_KEY = "current", CACHE_VERSION = 1;
-
-const FONT_CHOICES = {
-  "既定（システム）": "",
-  "BIZ UDPゴシック": "BIZ UDPGothic",
-  "ヒラギノ角ゴ": "Hiragino Sans",
-  "游ゴシック": "Yu Gothic",
-  "メイリオ": "Meiryo",
-  "游明朝": "Yu Mincho",
-  "ヒラギノ明朝": "Hiragino Mincho ProN",
-  "Arial": "Arial",
-  "カスタム": null,
-};
-const CUSTOM_FONT_LABEL = "カスタム";
 
 /* =====================================================================
  * 小さなユーティリティ
  * ===================================================================== */
 const $ = (id) => document.getElementById(id);
 const tick = () => new Promise((r) => setTimeout(r, 0));
-const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmt = (n) => Number(n).toLocaleString("ja-JP");
+
+function persistGet(key, initial) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return initial;
+    const parsed = JSON.parse(raw);
+    return initial && typeof initial === "object" && !Array.isArray(initial) ? { ...initial, ...parsed } : parsed;
+  } catch (e) { return initial; }
+}
+function persistSet(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* 保存できなくても動作は続ける */ }
+}
 
 /* =====================================================================
  * ZIP / XLSX リーダー（外部ライブラリなし。ブラウザ標準の DecompressionStream を使う）
@@ -473,8 +516,8 @@ async function parseXlsx(file, onProgress) {
 
   const wanted = new Set(EXPECTED_COLUMNS);
   let header = null;            // Map(列番号 -> 配列の位置)
-  let names = [];               // 配列の位置 -> 列名
-  let arrays = [];
+  const names = [];             // 配列の位置 -> 列名
+  const arrays = [];
   let nRows = 0;
 
   const rowRe = /<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g;
@@ -623,25 +666,8 @@ async function parseCsvFile(file, onProgress) {
 }
 
 /* =====================================================================
- * 保存（履歴・表示設定は localStorage、読み込んだデータは IndexedDB）
+ * データのキャッシュ（IndexedDB）
  * ===================================================================== */
-let memoryStore = null;
-function loadStore() {
-  try {
-    const d = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-    if (d && typeof d === "object") return d;
-  } catch (e) { /* 使えない環境ではメモリ上のみで動く */ }
-  return memoryStore || {};
-}
-const store = loadStore();
-if (!store.users || typeof store.users !== "object") store.users = {};
-if (!store.users[DEFAULT_USER]) store.users[DEFAULT_USER] = [];
-if (!store.ui) store.ui = {};
-function saveStore() {
-  memoryStore = store;
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); } catch (e) { /* 保存できなくても動作は続ける */ }
-}
-
 function openDb() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 1);
@@ -670,39 +696,35 @@ async function idbPut(key, value) {
 }
 
 /* =====================================================================
- * 状態
+ * 状態・テーブル
  * ===================================================================== */
 const S = {
   name: "",
-  table: null,       // { n, cols, years, reportIds, nReports, options }
-  subset: null,      // 絞り込み後の行番号
-  filters: { yearFrom: null, yearTo: null, sel: {} },
-  yearMin: null, yearMax: null,
-  results: null,     // 現在の検索のヒット行番号
-  shown: 0,
-  limit: PAGE_STEP,
-  lastRecorded: null,
+  table: null,           // { n, cols, text, years, reportIds, nReports, fvalues, fcodes }
+  filters: { year: null, sel: {} },
+  mask: null,            // 絞り込みに合う行（null は全行）
+  pool: 0,               // 絞り込み後の行数
+  mode: persistGet("ps.mode", "report"),
+  recent: persistGet("ps.recent", []),
+  settings: persistGet("ps.settings", DEFAULT_SETTINGS),
+  hits: null,
+  terms: [],
+  excl: [],
+  loadingText: "",
+  error: "",
   composing: false,
+  chipUpdaters: [],
 };
 
-function currentUser() {
-  const u = store.currentUser;
-  return u && store.users[u] ? u : DEFAULT_USER;
-}
-
-/* =====================================================================
- * テーブルの組み立て
- * ===================================================================== */
-function ratingSort(values) {
-  return values.sort((a, b) => {
-    const ia = RATING_ORDER.indexOf(a), ib = RATING_ORDER.indexOf(b);
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || (a < b ? -1 : a > b ? 1 : 0);
-  });
+function ratingRank(v) {
+  const i = RATING_ORDER.indexOf(v);
+  return i < 0 ? 99 : i;
 }
 
 function buildTable(cols) {
-  const n = cols[TEXT_COLUMN].length;
-  const table = { n, cols, years: null, reportIds: null, nReports: 0, options: {} };
+  const text = cols[TEXT_COLUMN];
+  const n = text.length;
+  const t = { n, cols, text, years: null, reportIds: null, nReports: 0, fvalues: {}, fcodes: {} };
 
   if (cols[YEAR_COLUMN]) {
     const years = new Float64Array(n);
@@ -711,7 +733,7 @@ function buildTable(cols) {
       const v = parseFloat(src[i]);
       years[i] = isFinite(v) ? Math.trunc(v) : NaN;
     }
-    table.years = years;
+    t.years = years;
   }
 
   let dateCol = null;
@@ -726,8 +748,8 @@ function buildTable(cols) {
       if (id === undefined) { id = map.size; map.set(key, id); }
       ids[i] = id;
     }
-    table.reportIds = ids;
-    table.nReports = map.size;
+    t.reportIds = ids;
+    t.nReports = map.size;
   }
 
   for (const c of FILTER_COLUMNS) {
@@ -735,471 +757,500 @@ function buildTable(cols) {
     const set = new Set(cols[c]);
     set.delete("");
     const values = [...set];
-    table.options[c] = c === RATING_COLUMN ? ratingSort(values) : values.sort();
+    if (c === RATING_COLUMN) values.sort((a, b) => ratingRank(a) - ratingRank(b) || (a < b ? -1 : a > b ? 1 : 0));
+    else values.sort((a, b) => a.localeCompare(b, "ja"));
+    const index = new Map(values.map((v, k) => [v, k]));
+    const codes = new Int32Array(n);
+    const src = cols[c];
+    for (let i = 0; i < n; i++) { const k = index.get(src[i]); codes[i] = k === undefined ? -1 : k; }
+    t.fvalues[c] = values;
+    t.fcodes[c] = codes;
   }
-  return table;
+  return t;
+}
+
+function yearBounds() {
+  const y = S.table && S.table.years;
+  if (!y) return null;
+  let min = Infinity, max = -Infinity;
+  for (let i = 0; i < y.length; i++) { const v = y[i]; if (v < min) min = v; if (v > max) max = v; }
+  return isFinite(min) ? [min, max] : null;
 }
 
 /* =====================================================================
  * 絞り込み
  * ===================================================================== */
-function applyFilters() {
+function recomputeMask() {
   const t = S.table;
-  const { yearFrom, yearTo, sel } = S.filters;
-  const yearActive = t.years && (yearFrom !== S.yearMin || yearTo !== S.yearMax);
-  const active = FILTER_COLUMNS.filter((c) => sel[c] && sel[c].size > 0 && t.cols[c]);
-  if (!yearActive && active.length === 0) {
-    S.subset = null;
-    $("filterCount").textContent = "";
-    return;
+  const { year, sel } = S.filters;
+  const active = FILTER_COLUMNS.filter((c) => sel[c] && sel[c].size && t.fvalues[c]);
+  if (!year && !active.length) { S.mask = null; S.pool = t.n; return; }
+  const mask = new Uint8Array(t.n).fill(1);
+  if (year && t.years) {
+    const [lo, hi] = year;
+    for (let i = 0; i < t.n; i++) { const y = t.years[i]; if (!(y >= lo && y <= hi)) mask[i] = 0; }
   }
-  const idx = [];
-  outer:
-  for (let i = 0; i < t.n; i++) {
-    if (yearActive) {
-      const y = t.years[i];
-      if (!(y >= yearFrom && y <= yearTo)) continue;
-    }
-    for (const c of active) if (!sel[c].has(t.cols[c][i])) continue outer;
-    idx.push(i);
+  for (const c of active) {
+    const ok = new Uint8Array(t.fvalues[c].length);
+    t.fvalues[c].forEach((v, k) => { if (sel[c].has(v)) ok[k] = 1; });
+    const codes = t.fcodes[c];
+    for (let i = 0; i < t.n; i++) { const k = codes[i]; if (k < 0 || !ok[k]) mask[i] = 0; }
   }
-  S.subset = Int32Array.from(idx);
-  $("filterCount").textContent = `絞り込み後: ${fmt(S.subset.length)} 行`;
-}
-
-function buildFilterUi() {
-  const box = $("filters");
-  box.innerHTML = "";
-  const t = S.table;
-  S.filters.sel = {};
-
-  if (t.years) {
-    let min = Infinity, max = -Infinity;
-    for (let i = 0; i < t.n; i++) { const y = t.years[i]; if (y < min) min = y; if (y > max) max = y; }
-    if (isFinite(min)) {
-      S.yearMin = min; S.yearMax = max;
-      let lo = Math.max(min, DEFAULT_YEAR_FROM), hi = Math.min(max, DEFAULT_YEAR_TO);
-      if (lo > hi) { lo = min; hi = max; }
-      S.filters.yearFrom = lo; S.filters.yearTo = hi;
-      if (min < max) {
-        const wrap = document.createElement("div");
-        wrap.className = "field";
-        wrap.innerHTML = `<div class="lbl">${escapeHtml(YEAR_COLUMN)}</div>
-          <div class="year-row"><input type="number" id="yearFrom" min="${min}" max="${max}" step="1" value="${lo}"><span>〜</span><input type="number" id="yearTo" min="${min}" max="${max}" step="1" value="${hi}"></div>`;
-        box.appendChild(wrap);
-        const onYear = () => {
-          const f = parseInt($("yearFrom").value, 10), g = parseInt($("yearTo").value, 10);
-          S.filters.yearFrom = isFinite(f) ? Math.min(Math.max(f, min), max) : min;
-          S.filters.yearTo = isFinite(g) ? Math.min(Math.max(g, min), max) : max;
-          filtersChanged();
-        };
-        $("yearFrom").addEventListener("change", onYear);
-        $("yearTo").addEventListener("change", onYear);
-      } else {
-        const cap = document.createElement("div");
-        cap.className = "caption";
-        cap.textContent = `${YEAR_COLUMN}: ${min} のみ`;
-        box.appendChild(cap);
-      }
-    }
-  }
-
-  for (const c of FILTER_COLUMNS) {
-    const options = t.options[c];
-    if (!options) continue;
-    S.filters.sel[c] = new Set();
-    const d = document.createElement("details");
-    d.className = "ms";
-    d.innerHTML = `<summary><span>${escapeHtml(c)}</span><span class="badge"></span></summary>
-      <div class="ms-body">
-        ${options.length > 12 ? '<input type="text" class="ms-search" placeholder="絞り込み表示">' : ""}
-        <div class="ms-list">${options.map((o) => `<label><input type="checkbox" value="${escapeHtml(o)}"> ${escapeHtml(o)}</label>`).join("")}</div>
-        <button type="button" class="ms-clear">選択を解除</button>
-      </div>`;
-    const badge = d.querySelector(".badge");
-    const refresh = () => { const k = S.filters.sel[c].size; badge.textContent = k ? `${k} 件選択` : ""; };
-    d.querySelector(".ms-list").addEventListener("change", (e) => {
-      const cb = e.target;
-      if (cb.checked) S.filters.sel[c].add(cb.value); else S.filters.sel[c].delete(cb.value);
-      refresh();
-      filtersChanged();
-    });
-    d.querySelector(".ms-clear").addEventListener("click", () => {
-      S.filters.sel[c].clear();
-      d.querySelectorAll(".ms-list input").forEach((x) => { x.checked = false; });
-      refresh();
-      filtersChanged();
-    });
-    const s = d.querySelector(".ms-search");
-    if (s) {
-      s.addEventListener("input", () => {
-        const q = s.value.trim();
-        d.querySelectorAll(".ms-list label").forEach((l) => l.classList.toggle("hidden", q !== "" && !l.textContent.includes(q)));
-      });
-    }
-    box.appendChild(d);
-  }
-  if (!box.firstChild) box.innerHTML = '<div class="caption">絞り込める列がありません。</div>';
-  applyFilters();
+  let pool = 0;
+  for (let i = 0; i < t.n; i++) pool += mask[i];
+  S.mask = mask;
+  S.pool = pool;
 }
 
 function filtersChanged() {
-  applyFilters();
-  runSearch(false);
+  recomputeMask();
+  S.chipUpdaters.forEach((f) => f());
+  const any = S.filters.year || Object.values(S.filters.sel).some((v) => v.size);
+  $("clearFilters").classList.toggle("hidden", !any);
+  refresh();
+}
+
+/* ---- ポップアップ（開くのは常に1つ。外側クリック・Esc で閉じる） ---- */
+let openAnchor = null;
+function closePop() {
+  if (!openAnchor) return;
+  const pop = openAnchor.querySelector(".popover");
+  if (pop) pop.hidden = true;
+  const btn = openAnchor.querySelector("[aria-expanded]");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+  openAnchor = null;
+}
+function togglePop(anchor) {
+  const wasOpen = openAnchor === anchor;
+  closePop();
+  if (wasOpen) return;
+  openAnchor = anchor;
+  anchor.querySelector(".popover").hidden = false;
+  const btn = anchor.querySelector("[aria-expanded]");
+  if (btn) btn.setAttribute("aria-expanded", "true");
+  const find = anchor.querySelector(".pop-find");
+  if (find) find.focus();
+}
+document.addEventListener("mousedown", (e) => { if (openAnchor && !openAnchor.contains(e.target)) closePop(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePop(); });
+
+function addYearChip(host, [min, max]) {
+  const years = Array.from({ length: max - min + 1 }, (_, i) => min + i);
+  const anchor = document.createElement("div");
+  anchor.className = "pop-anchor";
+  const opts = years.map((y) => `<option>${y}</option>`).join("");
+  anchor.innerHTML = `<span class="chip"><button class="chip-main" aria-expanded="false"></button><button class="chip-x" aria-label="年の絞り込みを解除">×</button></span>
+    <div class="popover year-pop" hidden>
+      <div class="year-row"><select class="y-from" aria-label="開始年">${opts}</select><span>–</span><select class="y-to" aria-label="終了年">${opts}</select></div>
+      <div class="year-grid">${years.map((y) => `<button data-y="${y}">${y}</button>`).join("")}</div>
+      <div class="pop-foot"><button class="link" data-act="all">全期間</button><button class="link" data-act="close">閉じる</button></div>
+    </div>`;
+  host.appendChild(anchor);
+  const chip = anchor.querySelector(".chip"), main = anchor.querySelector(".chip-main"), x = anchor.querySelector(".chip-x");
+  const sFrom = anchor.querySelector(".y-from"), sTo = anchor.querySelector(".y-to");
+  const grid = [...anchor.querySelectorAll(".year-grid button")];
+  const set = (a, b) => { S.filters.year = a === min && b === max ? null : [Math.min(a, b), Math.max(a, b)]; filtersChanged(); };
+  const update = () => {
+    const v = S.filters.year;
+    const [lo, hi] = v || [min, max];
+    chip.classList.toggle("active", !!v);
+    main.innerHTML = v ? `年<b>: ${lo}–${hi}</b>` : '年<span class="caret">▾</span>';
+    x.classList.toggle("hidden", !v);
+    sFrom.value = lo; sTo.value = hi;
+    grid.forEach((b) => { const y = Number(b.dataset.y); b.classList.toggle("in", y >= lo && y <= hi); });
+  };
+  main.addEventListener("click", () => togglePop(anchor));
+  x.addEventListener("click", () => { S.filters.year = null; filtersChanged(); });
+  sFrom.addEventListener("change", () => set(Number(sFrom.value), Number(sTo.value)));
+  sTo.addEventListener("change", () => set(Number(sFrom.value), Number(sTo.value)));
+  grid.forEach((b) => {
+    b.addEventListener("click", () => { const y = Number(b.dataset.y); set(y, y); });
+    b.addEventListener("dblclick", () => { S.filters.year = null; filtersChanged(); });
+  });
+  anchor.querySelector('[data-act="all"]').addEventListener("click", () => { S.filters.year = null; filtersChanged(); });
+  anchor.querySelector('[data-act="close"]').addEventListener("click", closePop);
+  S.chipUpdaters.push(update);
+  update();
+}
+
+function addMultiChip(host, col) {
+  const values = S.table.fvalues[col];
+  const label = FILTER_LABELS[col];
+  const sel = S.filters.sel[col] || (S.filters.sel[col] = new Set());
+  const anchor = document.createElement("div");
+  anchor.className = "pop-anchor";
+  anchor.innerHTML = `<span class="chip"><button class="chip-main" aria-expanded="false"></button><button class="chip-x" aria-label="${esc(label)}の絞り込みを解除">×</button></span>
+    <div class="popover" hidden>
+      ${values.length > 10 ? '<input class="pop-find" placeholder="絞り込む…">' : ""}
+      <div class="pop-list">${values.map((v, k) => `<label class="pop-item"><input type="checkbox" data-k="${k}">${esc(v)}</label>`).join("")}</div>
+      <div class="pop-foot"><button class="link" data-act="clear">解除</button><button class="link" data-act="close">閉じる</button></div>
+    </div>`;
+  host.appendChild(anchor);
+  const chip = anchor.querySelector(".chip"), main = anchor.querySelector(".chip-main"), x = anchor.querySelector(".chip-x");
+  const boxes = [...anchor.querySelectorAll(".pop-list input")];
+  const items = [...anchor.querySelectorAll(".pop-item")];
+  const update = () => {
+    const v = [...sel];
+    const summary = v.length === 0 ? "" : v.length <= 2 ? v.join(", ") : `${v.slice(0, 2).join(", ")} 他${v.length - 2}`;
+    chip.classList.toggle("active", v.length > 0);
+    main.innerHTML = summary ? `${esc(label)}<b>: ${esc(summary)}</b>` : `${esc(label)}<span class="caret">▾</span>`;
+    x.classList.toggle("hidden", v.length === 0);
+    boxes.forEach((b) => { b.checked = sel.has(values[Number(b.dataset.k)]); });
+  };
+  const clear = () => { sel.clear(); filtersChanged(); };
+  main.addEventListener("click", () => togglePop(anchor));
+  x.addEventListener("click", clear);
+  anchor.querySelector('[data-act="clear"]').addEventListener("click", clear);
+  anchor.querySelector('[data-act="close"]').addEventListener("click", closePop);
+  boxes.forEach((b) => b.addEventListener("change", () => {
+    const v = values[Number(b.dataset.k)];
+    if (b.checked) sel.add(v); else sel.delete(v);
+    filtersChanged();
+  }));
+  const find = anchor.querySelector(".pop-find");
+  if (find) {
+    find.addEventListener("input", () => {
+      const q = find.value;
+      items.forEach((it) => it.classList.toggle("hidden", q !== "" && !it.textContent.includes(q)));
+    });
+  }
+  S.chipUpdaters.push(update);
+  update();
+}
+
+function buildFilterUi() {
+  const host = $("filterChips");
+  host.innerHTML = "";
+  S.chipUpdaters = [];
+  S.filters = { year: null, sel: {} };
+  const b = yearBounds();
+  if (b && b[0] < b[1]) {
+    const lo = Math.max(b[0], DEFAULT_YEAR_FROM), hi = Math.min(b[1], DEFAULT_YEAR_TO);
+    if (lo <= hi && (lo !== b[0] || hi !== b[1])) S.filters.year = [lo, hi];
+    addYearChip(host, b);
+  }
+  for (const c of FILTER_COLUMNS) if (S.table.fvalues[c]) addMultiChip(host, c);
+  $("clearFilters").classList.toggle("hidden", !S.filters.year);
+  recomputeMask();
 }
 
 /* =====================================================================
- * 検索
+ * 検索（app.py の find_hits / mask_excluded / build_snippet と同じ挙動）
  * ===================================================================== */
-function modeOptions() {
-  return S.table && S.table.reportIds ? [MODE_AND_ROW, MODE_AND_REPORT, MODE_OR] : [MODE_AND_ROW, MODE_OR];
-}
-
-function buildModeUi() {
-  const sel = $("mode");
-  const opts = modeOptions();
-  sel.innerHTML = opts.map((o) => `<option>${escapeHtml(o)}</option>`).join("");
-  sel.value = S.table.reportIds ? MODE_AND_REPORT : MODE_AND_ROW;
-}
-
 function maskExcluded(text, excl) {
-  for (const ph of excl) {
-    if (text.indexOf(ph) >= 0) text = text.split(ph).join("\0".repeat(ph.length));
-  }
+  for (const ph of excl) if (text.indexOf(ph) >= 0) text = text.split(ph).join("\0".repeat(ph.length));
   return text;
 }
+const sortExcl = (excl) => excl.filter(Boolean).sort((a, b) => b.length - a.length);
+const effectiveMode = () => (S.mode === "report" && !(S.table && S.table.reportIds) ? "row" : S.mode);
 
-function findAllLiteral(text, query) {
-  const spans = [];
-  if (!query) return spans;
-  let start = 0;
-  for (;;) {
-    const idx = text.indexOf(query, start);
-    if (idx < 0) break;
-    spans.push([idx, idx + query.length]);
-    start = idx + Math.max(1, query.length);
+function findHits(terms, mode, excl) {
+  const t = S.table, n = t.n, mask = S.mask, text = t.text;
+  const a = new Uint8Array(n), b = new Uint8Array(n);
+  const two = terms.length === 2;
+  for (let i = 0; i < n; i++) {
+    if (mask && !mask[i]) continue;
+    const s = excl.length ? maskExcluded(text[i], excl) : text[i];
+    if (s.indexOf(terms[0]) >= 0) a[i] = 1;
+    if (two && s.indexOf(terms[1]) >= 0) b[i] = 1;
   }
-  return spans;
+  const out = [];
+  if (!two) {
+    for (let i = 0; i < n; i++) if (a[i]) out.push(i);
+  } else if (mode === "or") {
+    for (let i = 0; i < n; i++) if (a[i] || b[i]) out.push(i);
+  } else if (mode === "row" || !t.reportIds) {
+    for (let i = 0; i < n; i++) if (a[i] && b[i]) out.push(i);
+  } else {
+    const rid = t.reportIds;
+    const ha = new Uint8Array(t.nReports), hb = new Uint8Array(t.nReports);
+    for (let i = 0; i < n; i++) { if (a[i]) ha[rid[i]] = 1; if (b[i]) hb[rid[i]] = 1; }
+    for (let i = 0; i < n; i++) if ((a[i] || b[i]) && ha[rid[i]] && hb[rid[i]]) out.push(i);
+  }
+  return Int32Array.from(out);
 }
 
-function mergeSpans(spans) {
-  if (!spans.length) return [];
-  spans = spans.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const merged = [spans[0].slice()];
-  for (let i = 1; i < spans.length; i++) {
+/** 一致箇所 [開始, 終了, 何番目の語か]。重なりは結合する。 */
+function spansOf(text, terms, excl) {
+  const masked = excl.length ? maskExcluded(text, excl) : text;
+  const spans = [];
+  terms.forEach((q, ti) => {
+    let from = 0;
+    for (;;) {
+      const at = masked.indexOf(q, from);
+      if (at < 0) break;
+      spans.push([at, at + q.length, ti]);
+      from = at + Math.max(1, q.length);
+    }
+  });
+  spans.sort((x, y) => x[0] - y[0] || y[1] - x[1]);
+  const merged = [];
+  for (const sp of spans) {
     const last = merged[merged.length - 1];
-    if (spans[i][0] <= last[1]) last[1] = Math.max(last[1], spans[i][1]);
-    else merged.push(spans[i].slice());
+    if (last && sp[0] <= last[1]) last[1] = Math.max(last[1], sp[1]);
+    else merged.push(sp.slice());
   }
   return merged;
 }
 
-function buildSnippet(text, spans, ctx) {
-  if (!spans.length) return escapeHtml(text);
-  spans = mergeSpans(spans);
-  const ws = Math.max(0, spans[0][0] - ctx);
-  const we = Math.min(text.length, spans[spans.length - 1][1] + ctx);
-  const parts = [];
-  if (ws > 0) parts.push('<span class="ellipsis">…</span>');
-  let cursor = ws;
-  for (const [s0, e0] of spans) {
-    if (e0 <= ws || s0 >= we) continue;
-    const s = Math.max(s0, ws), e = Math.min(e0, we);
-    if (s > cursor) parts.push(`<span class="context">${escapeHtml(text.slice(cursor, s))}</span>`);
-    parts.push(`<span class="match">${escapeHtml(text.slice(s, e))}</span>`);
-    cursor = e;
+function snippetHtml(text, spans, context, full) {
+  const lo = full || !spans.length ? 0 : Math.max(0, spans[0][0] - context);
+  const hi = full || !spans.length ? text.length : Math.min(text.length, spans[spans.length - 1][1] + context);
+  const out = [];
+  if (lo > 0) out.push('<span class="ctx">…</span>');
+  let cur = lo;
+  for (const [s, e, ti] of spans) {
+    if (e <= lo || s >= hi) continue;
+    const ss = Math.max(s, lo), ee = Math.min(e, hi);
+    if (ss > cur) out.push(`<span class="ctx">${esc(text.slice(cur, ss))}</span>`);
+    out.push(`<mark class="t${ti}">${esc(text.slice(ss, ee))}</mark>`);
+    cur = ee;
   }
-  if (cursor < we) parts.push(`<span class="context">${escapeHtml(text.slice(cursor, we))}</span>`);
-  if (we < text.length) parts.push('<span class="ellipsis">…</span>');
-  return parts.join("");
+  if (cur < hi) out.push(`<span class="ctx">${esc(text.slice(cur, hi))}</span>`);
+  if (hi < text.length) out.push('<span class="ctx">…</span>');
+  return `<p class="snippet${full ? " full" : ""}">${out.join("")}</p>`;
 }
 
-function buildFullText(text, spans) {
-  const parts = [];
-  let cursor = 0;
-  for (const [s, e] of mergeSpans(spans)) {
-    if (s > cursor) parts.push(`<span class="context">${escapeHtml(text.slice(cursor, s))}</span>`);
-    parts.push(`<span class="match">${escapeHtml(text.slice(s, e))}</span>`);
-    cursor = e;
-  }
-  if (cursor < text.length) parts.push(`<span class="context">${escapeHtml(text.slice(cursor))}</span>`);
-  return parts.join("");
-}
-
-function metaHtml(i) {
+function metaHtml(row) {
   const c = S.table.cols;
-  const v = (col) => (c[col] ? escapeHtml(c[col][i] || "") : "");
-  const rating = [v(RATING_COLUMN), v("格付の方向性(業務)")].filter(Boolean).join(" ");
-  const items = [
-    ["", v("発行体名(CDEX)") ? `<b>${v("発行体名(CDEX)")}</b>` : ""],
-    ["年", v(YEAR_COLUMN)],
-    ["公表日", v("公表日(CDEX)")],
-    ["業種", v("業種(業務)")],
-    ["格付", rating],
-    ["アクション", v("格付アクション(業務)")],
-    ["担当", v("担当アナリスト(CDEX)")],
-    ["タグ", v("タグ")],
-  ];
-  return items.filter(([, val]) => val).map(([label, val]) => `${label} ${val}`.trim()).join(" · ");
-}
-
-function computeHits(terms, mode, excl) {
-  const t = S.table;
-  const text = t.cols[TEXT_COLUMN];
-  const sub = S.subset;
-  const m = sub ? sub.length : t.n;
-  const at = (p) => (sub ? sub[p] : p);
-  const masks = terms.map(() => new Uint8Array(m));
-  for (let p = 0; p < m; p++) {
-    const s = excl.length ? maskExcluded(text[at(p)], excl) : text[at(p)];
-    for (let k = 0; k < terms.length; k++) if (s.indexOf(terms[k]) >= 0) masks[k][p] = 1;
-  }
-  if (terms.length === 1) return { hit: masks[0] };
-  const hit = new Uint8Array(m);
-  const [a, b] = masks;
-  if (mode === MODE_OR) {
-    for (let p = 0; p < m; p++) hit[p] = a[p] | b[p];
-  } else if (mode === MODE_AND_ROW || !t.reportIds) {
-    for (let p = 0; p < m; p++) hit[p] = a[p] & b[p];
-  } else {
-    const hasA = new Uint8Array(t.nReports), hasB = new Uint8Array(t.nReports);
-    for (let p = 0; p < m; p++) {
-      const r = t.reportIds[at(p)];
-      if (a[p]) hasA[r] = 1;
-      if (b[p]) hasB[r] = 1;
-    }
-    for (let p = 0; p < m; p++) {
-      const r = t.reportIds[at(p)];
-      hit[p] = hasA[r] & hasB[r] & (a[p] | b[p]);
-    }
-  }
-  return { hit, positions: hit };
-}
-
-let currentQuery = null; // { terms, mode, excl, rows }
-
-function readInputs() {
-  const q1 = $("q1").value, q2 = $("q2").value;
-  const terms = [q1, q2].filter(Boolean);
-  const excl = $("excl").value.split(/\s+/).filter(Boolean).sort((x, y) => y.length - x.length);
-  return { terms, mode: $("mode").value, excl, q1, q2 };
-}
-
-let recordTimer = null;
-function runSearch(record = true) {
-  if (!S.table) return;
-  $("mode").disabled = !($("q1").value && $("q2").value);
-  const { terms, mode, excl, q1, q2 } = readInputs();
-  clearTimeout(recordTimer);
-  S.limit = $("showAll").checked ? Infinity : PAGE_STEP;
-
-  if (!terms.length) {
-    currentQuery = null;
-    $("summary").innerHTML = `<b>${fmt(S.table.n)} 行</b>を読み込みました。検索語を入力してください。`;
-    $("summary").className = "";
-    $("results").innerHTML = "";
-    $("more").classList.add("hidden");
-    renderRecent();
-    return;
-  }
-  $("recent").innerHTML = "";
-  $("summary").className = "search-meta";
-
-  const { hit } = computeHits(terms, mode, excl);
-  const rows = [];
-  const sub = S.subset;
-  for (let p = 0; p < hit.length; p++) if (hit[p]) rows.push(sub ? sub[p] : p);
-  const scope = terms.length === 2 ? `「${terms[0]}」と「${terms[1]}」${mode} · ` : "";
-  currentQuery = { terms, excl, rows, scope };
-
-  if (record) {
-    recordTimer = setTimeout(() => recordSearch(currentUser(), terms[0], terms.length === 2 ? terms[1] : "", mode, S.name, rows.length), 700);
-  }
-
-  if (rows.length === 0) {
-    $("summary").innerHTML = `${escapeHtml(scope)}完全一致: 全 0 件`;
-    $("results").innerHTML = '<div class="notice info">完全一致する句は見つかりませんでした。</div>';
-    $("more").classList.add("hidden");
-    return;
-  }
-  S.shown = 0;
-  $("results").innerHTML = "";
-  renderMore();
-}
-
-function renderMore() {
-  const q = currentQuery;
-  if (!q) return;
-  const ctx = Number($("ctxChars").value);
-  const text = S.table.cols[TEXT_COLUMN];
-  const target = S.limit === Infinity ? q.rows.length : Math.min(q.rows.length, S.shown + PAGE_STEP);
-  const cards = [];
-  let shownRows = S.shown;
-  for (let k = S.shown; k < target; k++) {
-    const i = q.rows[k];
-    const t = text[i];
-    const masked = q.excl.length ? maskExcluded(t, q.excl) : t;
-    const spans = [];
-    for (const term of q.terms) for (const sp of findAllLiteral(masked, term)) spans.push(sp);
-    shownRows = k + 1;
-    if (!spans.length) continue;
-    cards.push(`<details class="result-card"><summary><div class="meta">${metaHtml(i)}</div><div class="result-text">${buildSnippet(t, spans, ctx)}</div></summary><div class="full-text">${buildFullText(t, spans)}</div></details>`);
-  }
-  S.shown = shownRows;
-  $("results").insertAdjacentHTML("beforeend", cards.join(""));
-  $("summary").innerHTML = `${escapeHtml(q.scope)}完全一致: 全 ${fmt(q.rows.length)} 件中 ${fmt(S.shown)} 件表示 · 文章をクリックで全文表示`;
-
-  const more = $("more");
-  if (S.shown < q.rows.length) {
-    more.classList.remove("hidden");
-    more.innerHTML = `<button id="moreBtn">さらに ${fmt(Math.min(PAGE_STEP, q.rows.length - S.shown))} 件表示</button><button id="allBtn">残り ${fmt(q.rows.length - S.shown)} 件をすべて表示</button>`;
-    $("moreBtn").onclick = () => renderMore();
-    $("allBtn").onclick = () => { S.limit = Infinity; renderMore(); };
-  } else {
-    more.classList.add("hidden");
-  }
+  const g = (col) => (c[col] ? c[col][row] || "" : "");
+  const rating = [g(RATING_COLUMN), g("格付の方向性(業務)")].filter(Boolean).join(" ");
+  const rest = [g(YEAR_COLUMN), g("公表日(CDEX)"), g("業種(業務)"), g("格付アクション(業務)"), g("担当アナリスト(CDEX)")].filter(Boolean);
+  return `<div class="meta"><span class="issuer">${esc(g("発行体名(CDEX)"))}</span>${rating ? `<span class="rating">${esc(rating)}</span>` : ""}<span class="meta-rest">${esc(rest.join(" · "))}</span></div>`;
 }
 
 /* =====================================================================
- * 検索履歴（ユーザー別）
+ * 結果リスト（仮想スクロール: 見えている行だけを描画し、数万件でも軽く動く）
  * ===================================================================== */
-const entryKey = (e) => [e.query, e.query2 || "", e.mode || ""];
-const keyEq = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
-const extOf = (x, y) => x.startsWith(y) || y.startsWith(x);
-const isTypingStep = (a, b) => a[2] === b[2] && ((a[1] === b[1] && extOf(a[0], b[0])) || (a[0] === b[0] && extOf(a[1], b[1])));
+const V = { hits: null, n: 0, h: null, off: null, dirty: true, els: new Map(), active: -1, open: new Set(), est: 92, raf: 0 };
 
-function recordSearch(user, query, query2, mode, dataset, hits) {
-  const key = [query, query2, query2 ? mode : ""];
-  let entries = store.users[user] || (store.users[user] = []);
-  if (entries.length && keyEq(entryKey(entries[0]), key) && entries[0].dataset === dataset && entries[0].hits === hits) return;
-  const last = S.lastRecorded;
-  if (last && last.user === user && entries.length && keyEq(entryKey(entries[0]), last.key) && isTypingStep(last.key, key)) entries.shift();
-  entries = entries.filter((e) => !keyEq(entryKey(e), key));
-  const d = new Date(), p2 = (n) => String(n).padStart(2, "0");
-  entries.unshift({
-    query, query2, mode: key[2], dataset, hits,
-    at: `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`,
+function vReset(hits) {
+  const sc = $("results"), sizer = $("sizer");
+  V.els.clear();
+  sizer.innerHTML = "";
+  V.hits = hits;
+  V.n = hits ? hits.length : 0;
+  V.est = Math.round(5.1 * S.settings.fontSize);
+  V.h = new Float64Array(V.n).fill(V.est);
+  V.off = new Float64Array(V.n + 1);
+  V.dirty = true;
+  V.active = -1;
+  V.open = new Set();
+  sc.scrollTop = 0;
+  vRender();
+}
+
+function vLayout() {
+  let acc = 0;
+  for (let i = 0; i < V.n; i++) { V.off[i] = acc; acc += V.h[i]; }
+  V.off[V.n] = acc;
+  V.dirty = false;
+  $("sizer").style.height = acc + "px";
+}
+
+function vFind(y) { // off[i] <= y となる最大の i
+  let lo = 0, hi = V.n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (V.off[mid] <= y) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
+
+function makeCard(i) {
+  const row = V.hits[i];
+  const el = document.createElement("article");
+  el.dataset.i = i;
+  fillCard(el, i, row);
+  return el;
+}
+
+function fillCard(el, i, row) {
+  const isOpen = V.open.has(i);
+  el.className = "card" + (i === V.active ? " active" : "") + (isOpen ? " open" : "");
+  const text = S.table.text[row];
+  el.innerHTML = metaHtml(row) + snippetHtml(text, spansOf(text, S.terms, S.excl), S.settings.context, isOpen);
+}
+
+/** 描画した行の高さを測り、ずれていれば全体を再配置する（見えている先頭行が動かないよう補正する）。 */
+function vMeasure(idxs, anchor) {
+  const sc = $("results");
+  let changed = false;
+  for (const i of idxs) {
+    const el = V.els.get(i);
+    if (!el) continue;
+    const h = el.offsetHeight;
+    if (Math.abs(h - V.h[i]) > 0.5) { V.h[i] = h; changed = true; }
+  }
+  if (changed) {
+    const before = V.off[anchor];
+    V.dirty = true;
+    vLayout();
+    const delta = V.off[anchor] - before;
+    if (delta && sc.scrollTop > 0) sc.scrollTop += delta;
+  } else if (V.dirty) {
+    vLayout();
+  }
+  for (const [i, el] of V.els) el.style.transform = `translateY(${V.off[i]}px)`;
+}
+
+function vRender() {
+  if (!V.hits || !V.n) return;
+  if (V.dirty) vLayout();
+  const sc = $("results"), sizer = $("sizer");
+  const top = sc.scrollTop, vh = sc.clientHeight;
+  const first = vFind(top), last = vFind(top + vh);
+  const s = Math.max(0, first - OVERSCAN), e = Math.min(V.n - 1, last + OVERSCAN);
+  for (const [i, el] of V.els) if (i < s || i > e) { el.remove(); V.els.delete(i); }
+  const added = [];
+  for (let i = s; i <= e; i++) {
+    if (V.els.has(i)) continue;
+    const el = makeCard(i);
+    V.els.set(i, el);
+    sizer.appendChild(el);
+    added.push(i);
+  }
+  vMeasure(added, first);
+}
+
+function vScrollTo(i) {
+  const sc = $("results");
+  if (V.dirty) vLayout();
+  const a = V.off[i], b = V.off[i + 1];
+  if (a < sc.scrollTop) sc.scrollTop = a;
+  else if (b > sc.scrollTop + sc.clientHeight) sc.scrollTop = b - sc.clientHeight;
+  vRender();
+}
+
+function vSetActive(i) {
+  const prev = V.els.get(V.active);
+  if (prev) prev.classList.remove("active");
+  V.active = i;
+  const cur = V.els.get(i);
+  if (cur) cur.classList.add("active");
+}
+
+function vToggle(i) {
+  if (V.open.has(i)) V.open.delete(i); else V.open.add(i);
+  const el = V.els.get(i);
+  if (!el) return;
+  fillCard(el, i, V.hits[i]);
+  vMeasure([i], vFind($("results").scrollTop));
+}
+
+function initResults() {
+  const sc = $("results");
+  sc.addEventListener("scroll", () => {
+    if (V.raf) return;
+    V.raf = requestAnimationFrame(() => { V.raf = 0; vRender(); });
   });
-  entries.length = Math.min(entries.length, HISTORY_LIMIT);
-  store.users[user] = entries;
-  saveStore();
-  S.lastRecorded = { user, key };
+  window.addEventListener("resize", () => {
+    if (!V.hits) return;
+    vMeasure([...V.els.keys()], vFind(sc.scrollTop));
+    vRender();
+  });
+  $("sizer").addEventListener("click", (e) => {
+    const card = e.target.closest("article.card");
+    if (!card) return;
+    const i = Number(card.dataset.i);
+    vSetActive(i);
+    vToggle(i);
+  });
+  const focusRow = (i) => { vSetActive(i); vScrollTo(i); sc.focus({ preventScroll: true }); };
+  sc.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "j") {
+      e.preventDefault();
+      focusRow(Math.min(V.n - 1, V.active + 1));
+    } else if (e.key === "ArrowUp" || e.key === "k") {
+      e.preventDefault();
+      if (V.active <= 0) { vSetActive(-1); $("q").focus(); } else focusRow(V.active - 1);
+    } else if ((e.key === "Enter" || e.key === " ") && V.active >= 0) {
+      e.preventDefault();
+      vToggle(V.active);
+    } else if (e.key === "Escape") {
+      vSetActive(-1);
+      $("q").focus();
+    }
+  });
+  V.focusFirst = () => focusRow(0);
+}
+
+/* =====================================================================
+ * 画面の更新
+ * ===================================================================== */
+function renderStatus() {
+  let body;
+  if (S.error) body = `<span class="error">${esc(S.error)}</span>`;
+  else if (S.loadingText) body = `<span class="muted">${esc(S.loadingText)}</span>`;
+  else if (!S.table) body = '<span class="muted">Excel（.xlsx）または CSV を開くと検索できます。</span>';
+  else if (!S.hits) body = `<span class="muted"><b class="num">${fmt(S.pool)}</b> 行が対象（全 ${fmt(S.table.n)} 行）</span>`;
+  else {
+    const m = MODES.find((x) => x.id === effectiveMode());
+    const pill = S.terms.length === 2 && m ? `<span class="pill">${esc(m.label)}</span>` : "";
+    const hint = S.hits.length ? '<span class="spacer"></span><span class="hint"><kbd>↓</kbd> 結果へ <kbd>Enter</kbd> 全文 <kbd>Esc</kbd> 検索欄へ</span>' : "";
+    body = `<b class="num big">${fmt(S.hits.length)}</b><span class="muted"> 件 / ${fmt(S.pool)} 行</span>${pill}${hint}`
+      + (S.hits.length === 0 ? '<span class="muted"> — 完全一致する句は見つかりませんでした</span>' : "");
+  }
+  $("status").innerHTML = body;
+}
+
+function renderModeSeg() {
+  const eff = effectiveMode();
+  const modes = MODES.filter((m) => m.id !== "report" || (S.table && S.table.reportIds));
+  $("modeSeg").innerHTML = modes.map((m) => `<button role="radio" aria-checked="${eff === m.id}" class="${eff === m.id ? "on" : ""}" data-mode="${m.id}" title="${esc(m.hint)}">${esc(m.label)}</button>`).join("");
 }
 
 function renderRecent() {
   const box = $("recent");
-  const user = currentUser();
-  const entries = store.users[user] || [];
-  let html = '<hr><h3>最近の検索</h3>';
-  if (!entries.length) {
-    box.innerHTML = html + `<div class="caption">${escapeHtml(user)} さんの検索履歴はまだありません。</div>`;
+  if (!S.table || S.terms.length) { box.innerHTML = ""; return; }
+  if (!S.recent.length) {
+    box.innerHTML = '<div class="empty"><p>フレーズを入力すると、その場で完全一致の結果が出ます。</p><p class="muted"><kbd>/</kbd> 検索欄へ · <kbd>↓</kbd> 結果へ · <kbd>Enter</kbd> 全文 · <kbd>Esc</kbd> クリア</p></div>';
     return;
   }
-  const row = (e, i) => {
-    const label = e.query2 ? `${e.query} ＋ ${e.query2}` : e.query;
-    return `<div class="recent-row"><button data-i="${i}" title="${escapeHtml(label)}">${escapeHtml(label)}</button><div class="caption">${escapeHtml(e.at)} · ${fmt(e.hits)} 件 · ${escapeHtml(e.dataset)}${e.query2 && e.mode ? " · " + escapeHtml(e.mode) : ""}</div></div>`;
+  const ago = (t) => {
+    const s = (Date.now() - t) / 1000;
+    if (s < 60) return "たった今";
+    if (s < 3600) return `${Math.floor(s / 60)}分前`;
+    if (s < 86400) return `${Math.floor(s / 3600)}時間前`;
+    const d = new Date(t);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
   };
-  html += entries.slice(0, RECENT_SHOWN).map((e, i) => row(e, i)).join("");
-  if (entries.length > RECENT_SHOWN) {
-    html += `<details><summary class="caption" style="cursor:pointer">さらに過去の履歴（${fmt(entries.length - RECENT_SHOWN)} 件）</summary>${entries.slice(RECENT_SHOWN).map((e, i) => row(e, i + RECENT_SHOWN)).join("")}</details>`;
-  }
-  html += '<div style="margin-top:0.8rem"><button id="clearHistory">履歴を消去</button></div>';
-  box.innerHTML = html;
-  box.querySelectorAll("button[data-i]").forEach((b) => {
-    b.addEventListener("click", () => {
-      const e = entries[Number(b.dataset.i)];
-      $("q1").value = e.query;
-      $("q2").value = e.query2 || "";
-      if (e.mode && modeOptions().includes(e.mode)) $("mode").value = e.mode;
-      runSearch(true);
-    });
-  });
-  $("clearHistory").addEventListener("click", () => {
-    store.users[user] = [];
-    S.lastRecorded = null;
-    saveStore();
-    renderRecent();
-  });
+  const items = S.recent.slice(0, RECENT_SHOWN).map((r, i) => `<li>
+      <button class="recent-item" data-pick="${i}"><span class="recent-q">${esc(r.q)}${r.q2 ? `<span class="muted"> ＋ </span>${esc(r.q2)}` : ""}${r.excl ? `<span class="muted"> − ${esc(r.excl)}</span>` : ""}</span><span class="recent-meta">${fmt(r.hits)} 件 · ${ago(r.at)}</span></button>
+      <button class="icon-btn faint" data-del="${i}" aria-label="この履歴を削除">×</button></li>`).join("");
+  box.innerHTML = `<section class="recent"><div class="recent-head"><span>最近の検索</span><button class="link" id="clearRecent">履歴を消去</button></div><ul>${items}</ul></section>`;
 }
 
-/* =====================================================================
- * ユーザー・表示設定
- * ===================================================================== */
-function buildUserUi() {
-  const sel = $("userSelect");
-  const names = Object.keys(store.users);
-  sel.innerHTML = names.concat([NEW_USER_OPTION]).map((n) => `<option>${escapeHtml(n)}</option>`).join("");
-  sel.value = currentUser();
-  $("newUserBox").classList.add("hidden");
+let recordTimer = null;
+function scheduleRecord() {
+  clearTimeout(recordTimer);
+  const q = $("q").value, q2 = $("q2").value, excl = $("excl").value, mode = S.mode;
+  if (!S.hits || !q) return;
+  const hits = S.hits.length, dataset = S.name;
+  recordTimer = setTimeout(() => {
+    const entry = { q, q2, mode, excl, hits, at: Date.now(), dataset };
+    let rest = S.recent.filter((r) => !(r.q === q && r.q2 === q2 && r.excl === excl && r.mode === mode));
+    const top = rest[0];
+    if (top && Date.now() - top.at < 15000 && top.q2 === q2 && (q.startsWith(top.q) || top.q.startsWith(q))) rest = rest.slice(1);
+    S.recent = [entry, ...rest].slice(0, RECENT_MAX);
+    persistSet("ps.recent", S.recent);
+    if (!S.terms.length) renderRecent();
+  }, 1200);
 }
 
-function applyUi() {
-  const ui = store.ui;
-  const size = Number(ui.fontSize) || 16;
-  const label = ui.font in FONT_CHOICES ? ui.font : "既定（システム）";
-  let family = FONT_CHOICES[label];
-  if (label === CUSTOM_FONT_LABEL) family = (ui.fontCustom || "").replace(/["';{}<>]/g, "").trim();
-  const names = (family ? [family] : []).concat(["BIZ UDPGothic", "Hiragino Sans", "Yu Gothic"].filter((n) => n !== family));
-  document.documentElement.style.setProperty("--font", names.map((n) => `"${n}"`).join(", ") + ", Meiryo, sans-serif");
-  document.documentElement.style.setProperty("--font-size", size + "px");
-}
-
-function initSettingsUi() {
-  const ui = store.ui;
-  $("fontSelect").innerHTML = Object.keys(FONT_CHOICES).map((k) => `<option>${escapeHtml(k)}</option>`).join("");
-  $("fontSelect").value = ui.font in FONT_CHOICES ? ui.font : "既定（システム）";
-  $("fontCustom").value = ui.fontCustom || "";
-  $("fontCustom").disabled = $("fontSelect").value !== CUSTOM_FONT_LABEL;
-  $("fontSize").value = ui.fontSize || 16;
-  $("fontSizeVal").textContent = $("fontSize").value;
-  $("ctxChars").value = ui.ctx || 45;
-  $("ctxCharsVal").textContent = $("ctxChars").value;
-  $("showAll").checked = !!ui.showAll;
-  applyUi();
-
-  const saveUi = () => {
-    ui.font = $("fontSelect").value;
-    ui.fontCustom = $("fontCustom").value;
-    ui.fontSize = Number($("fontSize").value);
-    ui.ctx = Number($("ctxChars").value);
-    ui.showAll = $("showAll").checked;
-    saveStore();
-    applyUi();
-  };
-  $("fontSelect").addEventListener("change", () => { $("fontCustom").disabled = $("fontSelect").value !== CUSTOM_FONT_LABEL; saveUi(); });
-  $("fontCustom").addEventListener("change", saveUi);
-  $("fontSize").addEventListener("input", () => { $("fontSizeVal").textContent = $("fontSize").value; saveUi(); });
-  $("ctxChars").addEventListener("input", () => { $("ctxCharsVal").textContent = $("ctxChars").value; saveUi(); runSearch(false); });
-  $("showAll").addEventListener("change", () => { saveUi(); runSearch(false); });
-
-  $("userSelect").addEventListener("change", () => {
-    const v = $("userSelect").value;
-    if (v === NEW_USER_OPTION) {
-      $("newUserBox").classList.remove("hidden");
-      $("newUserName").focus();
-      return;
-    }
-    $("newUserBox").classList.add("hidden");
-    store.currentUser = v;
-    S.lastRecorded = null;
-    saveStore();
-    if (!currentQuery) renderRecent();
-  });
-  $("newUserName").addEventListener("input", () => { $("addUser").disabled = !$("newUserName").value.trim(); });
-  const addUser = () => {
-    const name = $("newUserName").value.trim();
-    if (!name) return;
-    if (!store.users[name]) store.users[name] = [];
-    store.currentUser = name;
-    S.lastRecorded = null;
-    saveStore();
-    $("newUserName").value = "";
-    $("addUser").disabled = true;
-    buildUserUi();
-    if (!currentQuery) renderRecent();
-  };
-  $("addUser").addEventListener("click", addUser);
-  $("newUserName").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) addUser(); });
+function refresh() {
+  if (!S.table) { renderStatus(); return; }
+  const q = $("q").value, q2 = $("q2").value;
+  S.terms = [q, q2].filter(Boolean);
+  S.excl = sortExcl($("excl").value.split(/\s+/));
+  $("clearQ").classList.toggle("hidden", !q);
+  S.hits = S.terms.length ? findHits(S.terms, effectiveMode(), S.excl) : null;
+  renderStatus();
+  const show = !!(S.hits && S.hits.length);
+  $("results").classList.toggle("hidden", !show);
+  if (show) vReset(S.hits); else vReset(null);
+  renderRecent();
+  scheduleRecord();
 }
 
 /* =====================================================================
@@ -1212,30 +1263,29 @@ function notice(kind, html) {
   $("notices").appendChild(d);
 }
 
-function setTable(name, cols, extraMeta) {
+function setTable(name, cols, extra) {
   S.name = name;
   S.table = buildTable(cols);
-  S.shown = 0;
-  currentQuery = null;
+  S.error = "";
+  S.loadingText = "";
   $("notices").innerHTML = "";
   const missing = EXPECTED_COLUMNS.filter((c) => !cols[c]);
-  if (missing.length) notice("warn", "次の列がファイルにありません（該当する表示・絞り込みは省略されます）: " + escapeHtml(missing.join(", ")));
+  if (missing.length) notice("", "次の列がファイルにありません（該当する表示・絞り込みは省略されます）: " + esc(missing.join(", ")));
   $("dropzone").classList.add("hidden");
-  $("databar").classList.remove("hidden");
-  $("dataName").textContent = name;
-  $("dataMeta").textContent = `${fmt(S.table.n)} 行${extraMeta ? " · " + extraMeta : ""}`;
-  $("searchArea").classList.remove("hidden");
+  $("searchBox").classList.remove("hidden");
+  $("dataLabel").textContent = `${name} · ${fmt(S.table.n)} 行${extra ? " · " + extra : ""}`;
+  $("openBtn").textContent = "データを更新";
   buildFilterUi();
-  buildModeUi();
-  runSearch(false);
+  renderModeSeg();
+  refresh();
 }
 
 async function loadFile(file) {
-  const loading = $("loading"), text = $("loadingText");
-  $("notices").innerHTML = "";
-  loading.classList.remove("hidden");
-  text.textContent = "読み込み中…";
-  const onProgress = (rows) => { text.textContent = `読み込み中… ${fmt(rows)} 行`; };
+  S.error = "";
+  S.loadingText = "読み込み中…";
+  $("progress").classList.remove("hidden");
+  renderStatus();
+  const onProgress = (rows) => { S.loadingText = `読み込み中… ${fmt(rows)} 行`; renderStatus(); };
   try {
     const lower = file.name.toLowerCase();
     let cols;
@@ -1243,23 +1293,22 @@ async function loadFile(file) {
     else if (/\.csv$/.test(lower)) cols = await parseCsvFile(file, onProgress);
     else if (/\.xls$/.test(lower)) throw new Error("古い形式（.xls）には対応していません。Excel で「.xlsx 形式」で保存し直してください。");
     else throw new Error("Excel（.xlsx）または CSV ファイルを選択してください。");
-
-    if (!cols[TEXT_COLUMN]) {
-      throw new Error(`「${TEXT_COLUMN}」列が見つかりません。次の列を持つファイルを指定してください: ${EXPECTED_COLUMNS.join(", ")}`);
-    }
+    if (!cols[TEXT_COLUMN]) throw new Error(`「${TEXT_COLUMN}」列が見つかりません。次の列を持つファイルを指定してください: ${EXPECTED_COLUMNS.join(", ")}`);
     if (cols[TEXT_COLUMN].length === 0) throw new Error("ファイルにデータがありません。");
     const savedAt = new Date();
     setTable(file.name, cols, "読み込み " + savedAt.toLocaleString("ja-JP"));
     try {
       await idbPut(DB_KEY, { v: CACHE_VERSION, name: file.name, savedAt: savedAt.getTime(), cols });
     } catch (e) {
-      notice("warn", "データをこのブラウザに保存できませんでした。次回も、もう一度ファイルを選択してください。");
+      notice("", "データをこのブラウザに保存できませんでした。次回も、もう一度ファイルを選択してください。");
     }
   } catch (e) {
-    notice("err", escapeHtml(e.message || String(e)));
+    S.loadingText = "";
+    S.error = e.message || String(e);
     if (!S.table) $("dropzone").classList.remove("hidden");
+    renderStatus();
   } finally {
-    loading.classList.add("hidden");
+    $("progress").classList.add("hidden");
   }
 }
 
@@ -1274,12 +1323,133 @@ async function loadCached() {
   return false;
 }
 
-function initDataUi() {
+/* =====================================================================
+ * 表示設定・イベント
+ * ===================================================================== */
+function applySettings() {
+  const st = S.settings;
+  const root = document.documentElement;
+  root.style.setProperty("--font-size", st.fontSize + "px");
+  root.style.setProperty("--font", st.font === "system-ui" ? "system-ui" : `"${st.font}"`);
+  if (st.theme === "auto") delete root.dataset.theme; else root.dataset.theme = st.theme;
+  $("fontSizeVal").textContent = st.fontSize + "px";
+  $("contextVal").textContent = st.context;
+  $("fontSize").value = st.fontSize;
+  $("context").value = st.context;
+  $("fontSel").value = st.font;
+  document.querySelectorAll("#themeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.theme === st.theme));
+}
+
+function updateSettings(patch, rerender) {
+  S.settings = { ...S.settings, ...patch };
+  persistSet("ps.settings", S.settings);
+  applySettings();
+  if (rerender && S.table) refresh();
+}
+
+function showSecond(on) {
+  $("secondRow").classList.toggle("hidden", !on);
+  $("addSecond").classList.toggle("hidden", on);
+  if (on) $("q2").focus();
+}
+function showExcl(on) {
+  $("exclRow").classList.toggle("hidden", !on);
+  $("addExcl").classList.toggle("hidden", on);
+  if (on) $("excl").focus();
+}
+
+function initUi() {
+  // 設定
+  $("fontSel").innerHTML = FONTS.map((f) => `<option value="${esc(f)}">${f === "system-ui" ? "端末の標準フォント" : esc(f)}</option>`).join("");
+  if (!FONTS.includes(S.settings.font)) S.settings.font = DEFAULT_SETTINGS.font;
+  applySettings();
+  $("settingsBtn").addEventListener("click", () => togglePop($("settingsAnchor")));
+  $("fontSize").addEventListener("input", (e) => updateSettings({ fontSize: Number(e.target.value) }, true));
+  $("context").addEventListener("input", (e) => updateSettings({ context: Number(e.target.value) }, true));
+  $("fontSel").addEventListener("change", (e) => updateSettings({ font: e.target.value }, true));
+  $("themeSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) updateSettings({ theme: b.dataset.theme }, false); });
+
+  // 検索欄
+  let timer = null;
+  const schedule = () => { clearTimeout(timer); timer = setTimeout(refresh, 40); };
+  for (const id of ["q", "q2", "excl"]) {
+    const el = $(id);
+    el.addEventListener("compositionstart", () => { S.composing = true; });
+    el.addEventListener("compositionend", () => { S.composing = false; schedule(); });
+    el.addEventListener("input", (e) => { if (!e.isComposing && !S.composing) schedule(); else $("clearQ").classList.toggle("hidden", !$("q").value); });
+  }
+  $("q").addEventListener("keydown", (e) => {
+    if (e.isComposing) return;
+    if (e.key === "Escape") {
+      if ($("q").value) { $("q").value = ""; refresh(); } else e.currentTarget.blur();
+    } else if (e.key === "ArrowDown" && S.hits && S.hits.length) {
+      e.preventDefault();
+      V.focusFirst();
+    }
+  });
+  $("clearQ").addEventListener("click", () => { $("q").value = ""; refresh(); $("q").focus(); });
+  $("addSecond").addEventListener("click", () => showSecond(true));
+  $("addExcl").addEventListener("click", () => showExcl(true));
+  $("removeSecond").addEventListener("click", () => { $("q2").value = ""; showSecond(false); refresh(); $("q").focus(); });
+  $("removeExcl").addEventListener("click", () => { $("excl").value = ""; showExcl(false); refresh(); $("q").focus(); });
+  $("q2").addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.isComposing) return;
+    if ($("q2").value) { $("q2").value = ""; refresh(); } else { showSecond(false); $("q").focus(); }
+  });
+  $("excl").addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.isComposing) return;
+    if ($("excl").value) { $("excl").value = ""; refresh(); } else { showExcl(false); $("q").focus(); }
+  });
+  $("modeSeg").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-mode]");
+    if (!b) return;
+    S.mode = b.dataset.mode;
+    persistSet("ps.mode", S.mode);
+    renderModeSeg();
+    refresh();
+  });
+  $("clearFilters").addEventListener("click", () => {
+    S.filters.year = null;
+    for (const k of Object.keys(S.filters.sel)) S.filters.sel[k].clear();
+    filtersChanged();
+  });
+
+  // 最近の検索
+  $("recent").addEventListener("click", (e) => {
+    const pick = e.target.closest("[data-pick]");
+    const del = e.target.closest("[data-del]");
+    if (e.target.closest("#clearRecent")) {
+      S.recent = []; persistSet("ps.recent", S.recent); renderRecent();
+    } else if (del) {
+      S.recent.splice(Number(del.dataset.del), 1); persistSet("ps.recent", S.recent); renderRecent();
+    } else if (pick) {
+      const r = S.recent[Number(pick.dataset.pick)];
+      $("q").value = r.q; $("q2").value = r.q2; $("excl").value = r.excl;
+      S.mode = r.mode; persistSet("ps.mode", S.mode);
+      showSecond(!!r.q2); showExcl(!!r.excl);
+      renderModeSeg();
+      refresh();
+      $("q").focus();
+    }
+  });
+
+  // キーボード: / または ⌘K で検索欄へ
+  window.addEventListener("keydown", (e) => {
+    const typing = e.target.closest && e.target.closest("input, textarea, select");
+    if ((e.key === "/" && !typing) || (e.key === "k" && (e.metaKey || e.ctrlKey))) {
+      if (!S.table) return;
+      e.preventDefault();
+      $("q").focus();
+      $("q").select();
+    }
+  });
+
+  // ファイルの読み込み
   const input = $("fileInput");
   const pick = () => input.click();
   $("dropzone").addEventListener("click", pick);
   $("dropzone").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
-  $("reloadBtn").addEventListener("click", pick);
+  $("openBtn").addEventListener("click", pick);
   input.addEventListener("change", () => {
     const f = input.files[0];
     input.value = "";
@@ -1296,32 +1466,19 @@ function initDataUi() {
     const f = e.dataTransfer && e.dataTransfer.files[0];
     if (f) loadFile(f);
   });
-}
 
-/* =====================================================================
- * 起動
- * ===================================================================== */
-function initSearchUi() {
-  let timer = null;
-  const schedule = () => { clearTimeout(timer); timer = setTimeout(() => runSearch(true), 80); };
-  for (const id of ["q1", "q2", "excl"]) {
-    const el = $(id);
-    el.addEventListener("compositionstart", () => { S.composing = true; });
-    el.addEventListener("compositionend", () => { S.composing = false; schedule(); });
-    el.addEventListener("input", (e) => { if (!e.isComposing && !S.composing) schedule(); });
-  }
-  $("mode").addEventListener("change", () => runSearch(true));
+  initResults();
 }
 
 (async function main() {
-  initSettingsUi();
-  buildUserUi();
-  initDataUi();
-  initSearchUi();
-  $("loading").classList.remove("hidden");
-  $("loadingText").textContent = "保存済みのデータを確認中…";
-  await loadCached();
-  $("loading").classList.add("hidden");
+  initUi();
+  renderStatus();
+  S.loadingText = "保存済みのデータを確認中…";
+  renderStatus();
+  const ok = await loadCached();
+  S.loadingText = "";
+  if (!ok) renderStatus();
+  else $("q").focus();
 })();
 </script>
 </body>
