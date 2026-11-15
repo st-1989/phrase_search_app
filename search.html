@@ -1,0 +1,1328 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Japanese Phrase Search</title>
+<style>
+:root {
+  --bg: #ffffff;
+  --side-bg: #f4f5f7;
+  --text: #1f2328;
+  --muted: #a0a0a0;
+  --subtle: #6b7280;
+  --border: rgba(128, 128, 128, 0.3);
+  --accent: #2563eb;
+  --accent-text: #ffffff;
+  --field-bg: #ffffff;
+  --warn-bg: #fff7e0;
+  --info-bg: #eaf2ff;
+  --err-bg: #fdecec;
+  --font-size: 16px;
+  --font: "BIZ UDPGothic", "Hiragino Sans", "Yu Gothic", Meiryo, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1117;
+    --side-bg: #1a1d24;
+    --text: #e6e6e6;
+    --muted: #7d8088;
+    --subtle: #9aa0aa;
+    --field-bg: #11141a;
+    --warn-bg: #3a3320;
+    --info-bg: #1b2a44;
+    --err-bg: #3d1f1f;
+    --accent: #5b8def;
+  }
+}
+* { box-sizing: border-box; }
+html { font-size: var(--font-size); }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+}
+button, input, select { font-family: inherit; font-size: 0.95rem; color: var(--text); }
+#app { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 100vh; }
+aside {
+  background: var(--side-bg);
+  padding: 1.2rem 1rem 3rem;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  max-height: 100vh;
+  position: sticky;
+  top: 0;
+}
+main { padding: 2rem 2rem 4rem; max-width: 1200px; width: 100%; }
+@media (max-width: 800px) {
+  #app { grid-template-columns: 1fr; }
+  aside { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--border); }
+  main { padding: 1rem 1rem 3rem; }
+}
+aside h2 { font-size: 1.15rem; margin: 1.2rem 0 0.5rem; }
+aside h2:first-child { margin-top: 0; }
+aside h3 { font-size: 1rem; margin: 1rem 0 0.4rem; }
+.field { margin-bottom: 0.8rem; }
+.field > label, .field > .lbl { display: block; font-size: 0.85rem; color: var(--subtle); margin-bottom: 0.25rem; }
+input[type=text], input[type=number], select {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+input[type=text]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+input:disabled, select:disabled { opacity: 0.5; }
+input[type=range] { width: 100%; }
+button {
+  padding: 0.4rem 0.8rem;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.row { display: flex; gap: 0.8rem; align-items: flex-end; }
+.row > .field { flex: 1 1 0; min-width: 0; margin-bottom: 0.6rem; }
+.row > .field.narrow { flex: 0 0 22%; min-width: 11rem; }
+@media (max-width: 800px) { .row { flex-wrap: wrap; } .row > .field { flex-basis: 100%; } }
+.range-val { float: right; color: var(--text); }
+.year-row { display: flex; gap: 0.5rem; align-items: center; }
+.year-row span { color: var(--subtle); }
+.check { display: flex; gap: 0.5rem; align-items: center; font-size: 0.95rem; }
+.caption { color: var(--subtle); font-size: 0.85rem; margin: 0.3rem 0; }
+
+details.ms { margin-bottom: 0.7rem; }
+details.ms > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 0.45rem 0.6rem;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+details.ms > summary::-webkit-details-marker { display: none; }
+details.ms .badge { color: var(--accent); font-weight: 700; }
+.ms-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px; background: var(--field-bg); padding: 0.4rem; }
+.ms-body input[type=text] { margin-bottom: 0.4rem; }
+.ms-list { max-height: 14rem; overflow-y: auto; }
+.ms-list label { display: flex; gap: 0.5rem; align-items: center; padding: 0.15rem 0.2rem; font-size: 0.9rem; cursor: pointer; }
+.ms-list label.hidden { display: none; }
+.ms-clear { margin-top: 0.4rem; font-size: 0.8rem; padding: 0.2rem 0.5rem; }
+
+.databar { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; margin-bottom: 1.2rem; }
+.databar .name { font-weight: 600; }
+.databar .meta { color: var(--subtle); font-size: 0.9rem; }
+#dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--subtle);
+  cursor: pointer;
+  margin-bottom: 1.5rem;
+}
+#dropzone.over { border-color: var(--accent); color: var(--text); }
+#dropzone b { color: var(--text); }
+.notice { padding: 0.7rem 0.9rem; border-radius: 8px; margin: 0.6rem 0; font-size: 0.95rem; }
+.notice.info { background: var(--info-bg); }
+.notice.warn { background: var(--warn-bg); }
+.notice.err { background: var(--err-bg); }
+progress { width: 100%; height: 0.5rem; }
+
+.search-meta { color: var(--subtle); font-size: 0.95rem; margin: 0.2rem 0 0.8rem 0; }
+.result-card { padding: 0.4rem 0.1rem; border-bottom: 1px solid var(--border); }
+.result-text { font-size: 1.05rem; line-height: 1.65; word-break: break-word; }
+.context { color: var(--muted); }
+.match { color: var(--text); font-weight: 700; }
+.ellipsis { color: var(--muted); }
+details.result-card > summary { list-style: none; cursor: pointer; }
+details.result-card > summary::-webkit-details-marker { display: none; }
+details.result-card > summary:hover .context { color: #808080; }
+.meta { color: var(--subtle); font-size: 0.88rem; margin-bottom: 0.15rem; }
+.meta b { color: var(--text); font-weight: 600; }
+.full-text {
+  margin-top: 0.4rem;
+  padding: 0.5rem 0.8rem;
+  background: rgba(128, 128, 128, 0.08);
+  border-left: 3px solid var(--border);
+  font-size: 1rem;
+  line-height: 1.7;
+  word-break: break-word;
+}
+.more { margin: 1rem 0; display: flex; gap: 0.6rem; }
+hr { border: none; border-top: 1px solid var(--border); margin: 1.6rem 0 1rem; }
+#recent h3 { margin: 0 0 0.6rem; font-size: 1.15rem; }
+.recent-row { display: grid; grid-template-columns: minmax(8rem, 3fr) 5fr; gap: 0.8rem; align-items: center; margin-bottom: 0.4rem; }
+.recent-row button { text-align: left; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-row .caption { margin: 0; }
+@media (max-width: 800px) { .recent-row { grid-template-columns: 1fr; gap: 0.1rem; margin-bottom: 0.8rem; } }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <h2>ユーザー</h2>
+    <div class="field">
+      <label for="userSelect">ユーザーを選択</label>
+      <select id="userSelect"></select>
+    </div>
+    <div class="field hidden" id="newUserBox">
+      <label for="newUserName">新しいユーザー名</label>
+      <input type="text" id="newUserName">
+      <div style="margin-top:0.4rem"><button id="addUser" disabled>追加</button></div>
+    </div>
+
+    <h2>表示</h2>
+    <div class="field">
+      <label for="fontSelect">フォント</label>
+      <select id="fontSelect"></select>
+    </div>
+    <div class="field">
+      <label for="fontCustom">フォント名</label>
+      <input type="text" id="fontCustom" disabled placeholder="手元にインストール済みのフォント名">
+    </div>
+    <div class="field">
+      <label for="fontSize">文字サイズ [px] <span class="range-val" id="fontSizeVal"></span></label>
+      <input type="range" id="fontSize" min="12" max="32" step="1">
+    </div>
+
+    <h2>設定</h2>
+    <div class="field">
+      <label for="ctxChars">前後の表示文字数 <span class="range-val" id="ctxCharsVal"></span></label>
+      <input type="range" id="ctxChars" min="10" max="120" step="5">
+    </div>
+    <div class="field">
+      <label class="check"><input type="checkbox" id="showAll"> 全件表示</label>
+      <div class="caption">オフのときは 100 件ずつ表示します（件数が多いと重くなります）。</div>
+    </div>
+
+    <h3>絞り込み</h3>
+    <div id="filters"><div class="caption">データを読み込むと表示されます。</div></div>
+    <div class="caption" id="filterCount"></div>
+  </aside>
+
+  <main>
+    <div id="dropzone" tabindex="0" role="button">
+      <div><b>Excel（.xlsx）または CSV ファイルをここにドロップ</b>、またはクリックして選択</div>
+      <div class="caption">ファイルはこのブラウザの中だけで読み込まれ、外部には送信されません。</div>
+    </div>
+    <div class="databar hidden" id="databar">
+      <span class="name" id="dataName"></span>
+      <span class="meta" id="dataMeta"></span>
+      <button id="reloadBtn">データを更新</button>
+    </div>
+    <input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv,text/csv" class="hidden">
+    <div id="loading" class="hidden">
+      <div class="caption" id="loadingText">読み込み中…</div>
+      <progress></progress>
+    </div>
+    <div id="notices"></div>
+
+    <div id="searchArea" class="hidden">
+      <div class="row">
+        <div class="field">
+          <label for="q1">検索フレーズ</label>
+          <input type="text" id="q1" placeholder="例: 比較的強い" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="q2">検索フレーズ2（任意）</label>
+          <input type="text" id="q2" placeholder="2つ目の語（空欄なら1語のみ）" autocomplete="off">
+        </div>
+        <div class="field narrow">
+          <label for="mode">2語の条件</label>
+          <select id="mode" title="同じ文: 1つの文に両方が入る / 同じレポート内: 別の文でも、同じレポートに両方が入る。"></select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="excl">除外フレーズ（任意・スペース区切り）</label>
+        <input type="text" id="excl" placeholder="例: 比較的強固（「強固」で検索したとき、「比較的強固」の中の「強固」を除く）" autocomplete="off">
+      </div>
+      <div id="summary" class="search-meta"></div>
+      <div id="results"></div>
+      <div id="more" class="more hidden"></div>
+      <div id="recent"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+"use strict";
+
+/* =====================================================================
+ * 設定（列名・既定値）
+ * ===================================================================== */
+const TEXT_COLUMN = "本文";
+const YEAR_COLUMN = "年(CDEX)";
+const RATING_COLUMN = "発行体格付(業務)";
+const EXPECTED_COLUMNS = [
+  "発行体ID(業務)", "発行体コード(業務)", "証券コード(CDEX)", YEAR_COLUMN, "公表日(CDEX)",
+  "発行体名(CDEX)", "発行体名(業務)", "業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)",
+  "公表日(業務)", RATING_COLUMN, "格付の方向性(業務)", "格付アクション(業務)", "タグ", TEXT_COLUMN,
+];
+const MULTI_FILTER_COLUMNS = ["業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)", "格付アクション(業務)"];
+const FILTER_COLUMNS = [RATING_COLUMN, ...MULTI_FILTER_COLUMNS];
+const RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
+  "BB+", "BB", "BB-", "B+", "B", "B-", "CCC", "CC", "C", "D"];
+const DEFAULT_YEAR_FROM = 2016, DEFAULT_YEAR_TO = 2026;
+
+const MODE_AND_ROW = "両方を含む（同じ文）";
+const MODE_AND_REPORT = "両方を含む（同じレポート内）";
+const MODE_OR = "どちらかを含む";
+
+const HISTORY_LIMIT = 200;
+const RECENT_SHOWN = 10;
+const DEFAULT_USER = "ゲスト";
+const NEW_USER_OPTION = "＋ 新しいユーザーを追加…";
+const PAGE_STEP = 100;
+const STORAGE_KEY = "phraseSearch.v1";
+const DB_NAME = "phraseSearch", DB_STORE = "datasets", DB_KEY = "current", CACHE_VERSION = 1;
+
+const FONT_CHOICES = {
+  "既定（システム）": "",
+  "BIZ UDPゴシック": "BIZ UDPGothic",
+  "ヒラギノ角ゴ": "Hiragino Sans",
+  "游ゴシック": "Yu Gothic",
+  "メイリオ": "Meiryo",
+  "游明朝": "Yu Mincho",
+  "ヒラギノ明朝": "Hiragino Mincho ProN",
+  "Arial": "Arial",
+  "カスタム": null,
+};
+const CUSTOM_FONT_LABEL = "カスタム";
+
+/* =====================================================================
+ * 小さなユーティリティ
+ * ===================================================================== */
+const $ = (id) => document.getElementById(id);
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (n) => Number(n).toLocaleString("ja-JP");
+
+/* =====================================================================
+ * ZIP / XLSX リーダー（外部ライブラリなし。ブラウザ標準の DecompressionStream を使う）
+ * ===================================================================== */
+function readZipDirectory(buf) {
+  const dv = new DataView(buf);
+  const u8 = new Uint8Array(buf);
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 22 - 65535); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("Excel（.xlsx）として読み込めませんでした。ファイルが壊れているか、形式が違います。");
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const entries = {};
+  const dec = new TextDecoder();
+  for (let i = 0; i < count; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true);
+    const csize = dv.getUint32(p + 20, true);
+    const nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+    const lho = dv.getUint32(p + 42, true);
+    const name = dec.decode(u8.subarray(p + 46, p + 46 + nlen));
+    entries[name] = { method, csize, lho };
+    p += 46 + nlen + xlen + clen;
+  }
+  return { entries, dv, u8 };
+}
+
+function zipEntryTextStream(zip, name) {
+  const en = zip.entries[name];
+  if (!en) return null;
+  if (en.csize === 0xffffffff) throw new Error("ZIP64 形式のファイルには対応していません。");
+  const { dv, u8 } = zip;
+  const nlen = dv.getUint16(en.lho + 26, true), xlen = dv.getUint16(en.lho + 28, true);
+  const start = en.lho + 30 + nlen + xlen;
+  let stream = new Blob([u8.subarray(start, start + en.csize)]).stream();
+  if (en.method === 8) {
+    if (typeof DecompressionStream === "undefined") {
+      throw new Error("このブラウザは Excel の展開に対応していません。Chrome / Edge / Safari / Firefox の最近の版をお使いください。");
+    }
+    stream = stream.pipeThrough(new DecompressionStream("deflate-raw"));
+  } else if (en.method !== 0) {
+    throw new Error("未対応の圧縮方式です。");
+  }
+  return stream.pipeThrough(new TextDecoderStream("utf-8"));
+}
+
+async function forEachChunk(stream, fn) {
+  const reader = stream.getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    await fn(value);
+  }
+}
+
+async function readAllText(stream) {
+  let s = "";
+  await forEachChunk(stream, (c) => { s += c; });
+  return s;
+}
+
+const XML_ENT = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+function unescapeXml(s) {
+  if (s.indexOf("&") >= 0) {
+    s = s.replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g, (m, g) => {
+      if (g[0] !== "#") return XML_ENT[g];
+      const cp = g[1] === "x" || g[1] === "X" ? parseInt(g.slice(2), 16) : parseInt(g.slice(1), 10);
+      return String.fromCodePoint(cp);
+    });
+  }
+  if (s.indexOf("_x") >= 0) s = s.replace(/_x([0-9A-Fa-f]{4})_/g, (m, h) => String.fromCharCode(parseInt(h, 16)));
+  return s;
+}
+
+/** <si> / <is> の中の文字列（ルビ rPh は除く）を連結する。 */
+function textOfRuns(xml) {
+  if (xml.indexOf("<rPh") >= 0) xml = xml.replace(/<rPh\b[\s\S]*?<\/rPh>/g, "");
+  let out = "";
+  const re = /<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g;
+  let m;
+  while ((m = re.exec(xml))) out += m[1];
+  return unescapeXml(out);
+}
+
+function parseSharedStrings(xml) {
+  const out = [];
+  const re = /<si\b[^>]*?(?:\/>|>([\s\S]*?)<\/si>)/g;
+  let m;
+  while ((m = re.exec(xml))) out.push(m[1] ? textOfRuns(m[1]) : "");
+  return out;
+}
+
+function parseDateStyles(xml) {
+  const customDate = {};
+  const reFmt = /<numFmt\b[^>]*numFmtId="(\d+)"[^>]*formatCode="([^"]*)"/g;
+  let m;
+  while ((m = reFmt.exec(xml))) {
+    const code = unescapeXml(m[2]).replace(/"[^"]*"|\\.|\[[^\]]*\]|_.|\*./g, "");
+    customDate[m[1]] = /[ymdhs]/i.test(code);
+  }
+  const isBuiltInDate = (id) => (id >= 14 && id <= 22) || (id >= 27 && id <= 36) || (id >= 45 && id <= 47) || (id >= 50 && id <= 58);
+  const dateXf = [];
+  const block = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(xml);
+  if (block) {
+    const reXf = /<xf\b[^>]*?numFmtId="(\d+)"/g;
+    while ((m = reXf.exec(block[1]))) {
+      const id = Number(m[1]);
+      dateXf.push(isBuiltInDate(id) || customDate[m[1]] === true);
+    }
+  }
+  return dateXf;
+}
+
+function serialToDate(text) {
+  const serial = Number(text);
+  if (!isFinite(serial)) return text;
+  const d = new Date(Math.round((serial - 25569) * 86400000));
+  const p2 = (n) => String(n).padStart(2, "0");
+  const date = `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`;
+  return Number.isInteger(serial) ? date : `${date} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`;
+}
+
+function colIndex(letters) {
+  let n = 0;
+  for (let i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
+  return n - 1;
+}
+
+async function firstSheetPath(zip) {
+  const wb = zipEntryTextStream(zip, "xl/workbook.xml");
+  const rels = zipEntryTextStream(zip, "xl/_rels/workbook.xml.rels");
+  if (wb && rels) {
+    const wbXml = await readAllText(wb);
+    const relXml = await readAllText(rels);
+    const sheet = /<sheet\b[^>]*?r:id="([^"]+)"/.exec(wbXml);
+    if (sheet) {
+      const reRel = /<Relationship\b[^>]*>/g;
+      let m;
+      while ((m = reRel.exec(relXml))) {
+        const id = /\bId="([^"]+)"/.exec(m[0]);
+        const target = /\bTarget="([^"]+)"/.exec(m[0]);
+        if (id && target && id[1] === sheet[1]) {
+          const t = target[1];
+          return t.startsWith("/") ? t.slice(1) : "xl/" + t;
+        }
+      }
+    }
+  }
+  return "xl/worksheets/sheet1.xml";
+}
+
+/** .xlsx の先頭シートを読み、EXPECTED_COLUMNS に当たる列だけを文字列配列として返す。 */
+async function parseXlsx(file, onProgress) {
+  const zip = readZipDirectory(await file.arrayBuffer());
+  const sheetPath = await firstSheetPath(zip);
+  if (!zip.entries[sheetPath]) throw new Error("シートが見つかりませんでした。");
+
+  let shared = [];
+  const ssStream = zipEntryTextStream(zip, "xl/sharedStrings.xml");
+  if (ssStream) shared = parseSharedStrings(await readAllText(ssStream));
+  let dateXf = [];
+  const stStream = zipEntryTextStream(zip, "xl/styles.xml");
+  if (stStream) dateXf = parseDateStyles(await readAllText(stStream));
+
+  const wanted = new Set(EXPECTED_COLUMNS);
+  let header = null;            // Map(列番号 -> 配列の位置)
+  let names = [];               // 配列の位置 -> 列名
+  let arrays = [];
+  let nRows = 0;
+
+  const rowRe = /<row\b[^>]*?(?:\/>|>([\s\S]*?)<\/row>)/g;
+  const cellRe = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+  const reR = /\br="([A-Z]+)\d+"/, reT = /\bt="([^"]*)"/, reS = /\bs="(\d+)"/;
+  const reV = /<v>([\s\S]*?)<\/v>/;
+
+  function cellValue(attrs, inner) {
+    if (!inner) return "";
+    const t = reT.exec(attrs);
+    const type = t ? t[1] : "n";
+    if (type === "inlineStr") return textOfRuns(inner);
+    const v = reV.exec(inner);
+    if (!v) return "";
+    const raw = v[1];
+    if (type === "s") return shared[Number(raw)] ?? "";
+    if (type === "str") return unescapeXml(raw);
+    if (type === "b") return raw === "1" ? "TRUE" : "FALSE";
+    if (type === "e") return "";
+    if (type === "d") return raw;
+    const s = reS.exec(attrs);
+    if (s && dateXf[Number(s[1])]) return serialToDate(raw);
+    return raw;
+  }
+
+  function processRows(xml) {
+    rowRe.lastIndex = 0;
+    let rm;
+    while ((rm = rowRe.exec(xml))) {
+      const inner = rm[1];
+      if (!inner) continue;
+      cellRe.lastIndex = 0;
+      let cm, prev = -1;
+      if (!header) {
+        const found = [];
+        while ((cm = cellRe.exec(inner))) {
+          const r = reR.exec(cm[1]);
+          const col = r ? colIndex(r[1]) : prev + 1;
+          prev = col;
+          found.push([col, cellValue(cm[1], cm[2]).trim()]);
+        }
+        if (!found.some(([, v]) => v)) continue;
+        header = new Map();
+        for (const [col, v] of found) {
+          if (wanted.has(v) && !names.includes(v)) { header.set(col, names.length); names.push(v); arrays.push([]); }
+        }
+        continue;
+      }
+      const vals = new Array(names.length).fill("");
+      let any = false;
+      while ((cm = cellRe.exec(inner))) {
+        const r = reR.exec(cm[1]);
+        const col = r ? colIndex(r[1]) : prev + 1;
+        prev = col;
+        const pos = header.get(col);
+        if (pos === undefined) continue;
+        const v = cellValue(cm[1], cm[2]);
+        if (v) { vals[pos] = v; any = true; }
+      }
+      if (!any) continue;
+      for (let k = 0; k < vals.length; k++) arrays[k].push(vals[k]);
+      nRows++;
+    }
+  }
+
+  let buf = "";
+  await forEachChunk(zipEntryTextStream(zip, sheetPath), async (chunk) => {
+    buf += chunk;
+    const last = buf.lastIndexOf("</row>");
+    if (last < 0) return;
+    processRows(buf.slice(0, last + 6));
+    buf = buf.slice(last + 6);
+    onProgress(nRows);
+    await tick();
+  });
+  processRows(buf);
+  onProgress(nRows);
+
+  if (!header) throw new Error("シートにデータがありません。");
+  const cols = {};
+  names.forEach((n, i) => { cols[n] = arrays[i]; });
+  return cols;
+}
+
+/* =====================================================================
+ * CSV リーダー
+ * ===================================================================== */
+function decodeCsv(buf) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } catch (e) {
+    return new TextDecoder("shift_jis").decode(buf);
+  }
+}
+
+function parseCsvText(text) {
+  const rows = [];
+  const n = text.length;
+  const re = /[^,\r\n]*/y;
+  let i = 0, row = [];
+  while (i < n) {
+    let field;
+    if (text.charCodeAt(i) === 34) {
+      let j = i + 1, out = "";
+      for (;;) {
+        const k = text.indexOf('"', j);
+        if (k < 0) { out += text.slice(j); j = n; break; }
+        if (text.charCodeAt(k + 1) === 34) { out += text.slice(j, k + 1); j = k + 2; continue; }
+        out += text.slice(j, k); j = k + 1; break;
+      }
+      field = out; i = j;
+    } else {
+      re.lastIndex = i;
+      field = re.exec(text)[0];
+      i += field.length;
+    }
+    row.push(field);
+    const c = text.charCodeAt(i);
+    if (c === 44) { i++; if (i >= n) { row.push(""); rows.push(row); row = []; } continue; }
+    if (c === 13) { i++; if (text.charCodeAt(i) === 10) i++; rows.push(row); row = []; continue; }
+    if (c === 10) { i++; rows.push(row); row = []; continue; }
+  }
+  if (row.length) rows.push(row);
+  return rows;
+}
+
+async function parseCsvFile(file, onProgress) {
+  const rows = parseCsvText(decodeCsv(await file.arrayBuffer()));
+  const head = rows.findIndex((r) => r.some((v) => v.trim()));
+  if (head < 0) throw new Error("ファイルにデータがありません。");
+  const wanted = new Set(EXPECTED_COLUMNS);
+  const picks = [];
+  const cols = {};
+  rows[head].forEach((v, idx) => {
+    v = v.trim();
+    if (wanted.has(v) && !(v in cols)) { picks.push([idx, v]); cols[v] = []; }
+  });
+  for (let r = head + 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (row.length === 1 && row[0] === "") continue;
+    for (const [idx, name] of picks) cols[name].push(row[idx] ?? "");
+    if (r % 5000 === 0) { onProgress(r - head); await tick(); }
+  }
+  onProgress(rows.length - head - 1);
+  return cols;
+}
+
+/* =====================================================================
+ * 保存（履歴・表示設定は localStorage、読み込んだデータは IndexedDB）
+ * ===================================================================== */
+let memoryStore = null;
+function loadStore() {
+  try {
+    const d = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    if (d && typeof d === "object") return d;
+  } catch (e) { /* 使えない環境ではメモリ上のみで動く */ }
+  return memoryStore || {};
+}
+const store = loadStore();
+if (!store.users || typeof store.users !== "object") store.users = {};
+if (!store.users[DEFAULT_USER]) store.users[DEFAULT_USER] = [];
+if (!store.ui) store.ui = {};
+function saveStore() {
+  memoryStore = store;
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); } catch (e) { /* 保存できなくても動作は続ける */ }
+}
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(DB_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function idbGet(key) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const q = db.transaction(DB_STORE).objectStore(DB_STORE).get(key);
+    q.onsuccess = () => resolve(q.result);
+    q.onerror = () => reject(q.error);
+  });
+}
+async function idbPut(key, value) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, "readwrite");
+    tx.objectStore(DB_STORE).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+/* =====================================================================
+ * 状態
+ * ===================================================================== */
+const S = {
+  name: "",
+  table: null,       // { n, cols, years, reportIds, nReports, options }
+  subset: null,      // 絞り込み後の行番号
+  filters: { yearFrom: null, yearTo: null, sel: {} },
+  yearMin: null, yearMax: null,
+  results: null,     // 現在の検索のヒット行番号
+  shown: 0,
+  limit: PAGE_STEP,
+  lastRecorded: null,
+  composing: false,
+};
+
+function currentUser() {
+  const u = store.currentUser;
+  return u && store.users[u] ? u : DEFAULT_USER;
+}
+
+/* =====================================================================
+ * テーブルの組み立て
+ * ===================================================================== */
+function ratingSort(values) {
+  return values.sort((a, b) => {
+    const ia = RATING_ORDER.indexOf(a), ib = RATING_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || (a < b ? -1 : a > b ? 1 : 0);
+  });
+}
+
+function buildTable(cols) {
+  const n = cols[TEXT_COLUMN].length;
+  const table = { n, cols, years: null, reportIds: null, nReports: 0, options: {} };
+
+  if (cols[YEAR_COLUMN]) {
+    const years = new Float64Array(n);
+    const src = cols[YEAR_COLUMN];
+    for (let i = 0; i < n; i++) {
+      const v = parseFloat(src[i]);
+      years[i] = isFinite(v) ? Math.trunc(v) : NaN;
+    }
+    table.years = years;
+  }
+
+  let dateCol = null;
+  for (const c of ["公表日(業務)", "公表日(CDEX)"]) if (cols[c]) { dateCol = c; break; }
+  if (cols["発行体ID(業務)"] && dateCol) {
+    const ids = new Int32Array(n);
+    const map = new Map();
+    const a = cols["発行体ID(業務)"], b = cols[dateCol];
+    for (let i = 0; i < n; i++) {
+      const key = a[i] + "\u0001" + b[i];
+      let id = map.get(key);
+      if (id === undefined) { id = map.size; map.set(key, id); }
+      ids[i] = id;
+    }
+    table.reportIds = ids;
+    table.nReports = map.size;
+  }
+
+  for (const c of FILTER_COLUMNS) {
+    if (!cols[c]) continue;
+    const set = new Set(cols[c]);
+    set.delete("");
+    const values = [...set];
+    table.options[c] = c === RATING_COLUMN ? ratingSort(values) : values.sort();
+  }
+  return table;
+}
+
+/* =====================================================================
+ * 絞り込み
+ * ===================================================================== */
+function applyFilters() {
+  const t = S.table;
+  const { yearFrom, yearTo, sel } = S.filters;
+  const yearActive = t.years && (yearFrom !== S.yearMin || yearTo !== S.yearMax);
+  const active = FILTER_COLUMNS.filter((c) => sel[c] && sel[c].size > 0 && t.cols[c]);
+  if (!yearActive && active.length === 0) {
+    S.subset = null;
+    $("filterCount").textContent = "";
+    return;
+  }
+  const idx = [];
+  outer:
+  for (let i = 0; i < t.n; i++) {
+    if (yearActive) {
+      const y = t.years[i];
+      if (!(y >= yearFrom && y <= yearTo)) continue;
+    }
+    for (const c of active) if (!sel[c].has(t.cols[c][i])) continue outer;
+    idx.push(i);
+  }
+  S.subset = Int32Array.from(idx);
+  $("filterCount").textContent = `絞り込み後: ${fmt(S.subset.length)} 行`;
+}
+
+function buildFilterUi() {
+  const box = $("filters");
+  box.innerHTML = "";
+  const t = S.table;
+  S.filters.sel = {};
+
+  if (t.years) {
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < t.n; i++) { const y = t.years[i]; if (y < min) min = y; if (y > max) max = y; }
+    if (isFinite(min)) {
+      S.yearMin = min; S.yearMax = max;
+      let lo = Math.max(min, DEFAULT_YEAR_FROM), hi = Math.min(max, DEFAULT_YEAR_TO);
+      if (lo > hi) { lo = min; hi = max; }
+      S.filters.yearFrom = lo; S.filters.yearTo = hi;
+      if (min < max) {
+        const wrap = document.createElement("div");
+        wrap.className = "field";
+        wrap.innerHTML = `<div class="lbl">${escapeHtml(YEAR_COLUMN)}</div>
+          <div class="year-row"><input type="number" id="yearFrom" min="${min}" max="${max}" step="1" value="${lo}"><span>〜</span><input type="number" id="yearTo" min="${min}" max="${max}" step="1" value="${hi}"></div>`;
+        box.appendChild(wrap);
+        const onYear = () => {
+          const f = parseInt($("yearFrom").value, 10), g = parseInt($("yearTo").value, 10);
+          S.filters.yearFrom = isFinite(f) ? Math.min(Math.max(f, min), max) : min;
+          S.filters.yearTo = isFinite(g) ? Math.min(Math.max(g, min), max) : max;
+          filtersChanged();
+        };
+        $("yearFrom").addEventListener("change", onYear);
+        $("yearTo").addEventListener("change", onYear);
+      } else {
+        const cap = document.createElement("div");
+        cap.className = "caption";
+        cap.textContent = `${YEAR_COLUMN}: ${min} のみ`;
+        box.appendChild(cap);
+      }
+    }
+  }
+
+  for (const c of FILTER_COLUMNS) {
+    const options = t.options[c];
+    if (!options) continue;
+    S.filters.sel[c] = new Set();
+    const d = document.createElement("details");
+    d.className = "ms";
+    d.innerHTML = `<summary><span>${escapeHtml(c)}</span><span class="badge"></span></summary>
+      <div class="ms-body">
+        ${options.length > 12 ? '<input type="text" class="ms-search" placeholder="絞り込み表示">' : ""}
+        <div class="ms-list">${options.map((o) => `<label><input type="checkbox" value="${escapeHtml(o)}"> ${escapeHtml(o)}</label>`).join("")}</div>
+        <button type="button" class="ms-clear">選択を解除</button>
+      </div>`;
+    const badge = d.querySelector(".badge");
+    const refresh = () => { const k = S.filters.sel[c].size; badge.textContent = k ? `${k} 件選択` : ""; };
+    d.querySelector(".ms-list").addEventListener("change", (e) => {
+      const cb = e.target;
+      if (cb.checked) S.filters.sel[c].add(cb.value); else S.filters.sel[c].delete(cb.value);
+      refresh();
+      filtersChanged();
+    });
+    d.querySelector(".ms-clear").addEventListener("click", () => {
+      S.filters.sel[c].clear();
+      d.querySelectorAll(".ms-list input").forEach((x) => { x.checked = false; });
+      refresh();
+      filtersChanged();
+    });
+    const s = d.querySelector(".ms-search");
+    if (s) {
+      s.addEventListener("input", () => {
+        const q = s.value.trim();
+        d.querySelectorAll(".ms-list label").forEach((l) => l.classList.toggle("hidden", q !== "" && !l.textContent.includes(q)));
+      });
+    }
+    box.appendChild(d);
+  }
+  if (!box.firstChild) box.innerHTML = '<div class="caption">絞り込める列がありません。</div>';
+  applyFilters();
+}
+
+function filtersChanged() {
+  applyFilters();
+  runSearch(false);
+}
+
+/* =====================================================================
+ * 検索
+ * ===================================================================== */
+function modeOptions() {
+  return S.table && S.table.reportIds ? [MODE_AND_ROW, MODE_AND_REPORT, MODE_OR] : [MODE_AND_ROW, MODE_OR];
+}
+
+function buildModeUi() {
+  const sel = $("mode");
+  const opts = modeOptions();
+  sel.innerHTML = opts.map((o) => `<option>${escapeHtml(o)}</option>`).join("");
+  sel.value = S.table.reportIds ? MODE_AND_REPORT : MODE_AND_ROW;
+}
+
+function maskExcluded(text, excl) {
+  for (const ph of excl) {
+    if (text.indexOf(ph) >= 0) text = text.split(ph).join("\0".repeat(ph.length));
+  }
+  return text;
+}
+
+function findAllLiteral(text, query) {
+  const spans = [];
+  if (!query) return spans;
+  let start = 0;
+  for (;;) {
+    const idx = text.indexOf(query, start);
+    if (idx < 0) break;
+    spans.push([idx, idx + query.length]);
+    start = idx + Math.max(1, query.length);
+  }
+  return spans;
+}
+
+function mergeSpans(spans) {
+  if (!spans.length) return [];
+  spans = spans.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const merged = [spans[0].slice()];
+  for (let i = 1; i < spans.length; i++) {
+    const last = merged[merged.length - 1];
+    if (spans[i][0] <= last[1]) last[1] = Math.max(last[1], spans[i][1]);
+    else merged.push(spans[i].slice());
+  }
+  return merged;
+}
+
+function buildSnippet(text, spans, ctx) {
+  if (!spans.length) return escapeHtml(text);
+  spans = mergeSpans(spans);
+  const ws = Math.max(0, spans[0][0] - ctx);
+  const we = Math.min(text.length, spans[spans.length - 1][1] + ctx);
+  const parts = [];
+  if (ws > 0) parts.push('<span class="ellipsis">…</span>');
+  let cursor = ws;
+  for (const [s0, e0] of spans) {
+    if (e0 <= ws || s0 >= we) continue;
+    const s = Math.max(s0, ws), e = Math.min(e0, we);
+    if (s > cursor) parts.push(`<span class="context">${escapeHtml(text.slice(cursor, s))}</span>`);
+    parts.push(`<span class="match">${escapeHtml(text.slice(s, e))}</span>`);
+    cursor = e;
+  }
+  if (cursor < we) parts.push(`<span class="context">${escapeHtml(text.slice(cursor, we))}</span>`);
+  if (we < text.length) parts.push('<span class="ellipsis">…</span>');
+  return parts.join("");
+}
+
+function buildFullText(text, spans) {
+  const parts = [];
+  let cursor = 0;
+  for (const [s, e] of mergeSpans(spans)) {
+    if (s > cursor) parts.push(`<span class="context">${escapeHtml(text.slice(cursor, s))}</span>`);
+    parts.push(`<span class="match">${escapeHtml(text.slice(s, e))}</span>`);
+    cursor = e;
+  }
+  if (cursor < text.length) parts.push(`<span class="context">${escapeHtml(text.slice(cursor))}</span>`);
+  return parts.join("");
+}
+
+function metaHtml(i) {
+  const c = S.table.cols;
+  const v = (col) => (c[col] ? escapeHtml(c[col][i] || "") : "");
+  const rating = [v(RATING_COLUMN), v("格付の方向性(業務)")].filter(Boolean).join(" ");
+  const items = [
+    ["", v("発行体名(CDEX)") ? `<b>${v("発行体名(CDEX)")}</b>` : ""],
+    ["年", v(YEAR_COLUMN)],
+    ["公表日", v("公表日(CDEX)")],
+    ["業種", v("業種(業務)")],
+    ["格付", rating],
+    ["アクション", v("格付アクション(業務)")],
+    ["担当", v("担当アナリスト(CDEX)")],
+    ["タグ", v("タグ")],
+  ];
+  return items.filter(([, val]) => val).map(([label, val]) => `${label} ${val}`.trim()).join(" · ");
+}
+
+function computeHits(terms, mode, excl) {
+  const t = S.table;
+  const text = t.cols[TEXT_COLUMN];
+  const sub = S.subset;
+  const m = sub ? sub.length : t.n;
+  const at = (p) => (sub ? sub[p] : p);
+  const masks = terms.map(() => new Uint8Array(m));
+  for (let p = 0; p < m; p++) {
+    const s = excl.length ? maskExcluded(text[at(p)], excl) : text[at(p)];
+    for (let k = 0; k < terms.length; k++) if (s.indexOf(terms[k]) >= 0) masks[k][p] = 1;
+  }
+  if (terms.length === 1) return { hit: masks[0] };
+  const hit = new Uint8Array(m);
+  const [a, b] = masks;
+  if (mode === MODE_OR) {
+    for (let p = 0; p < m; p++) hit[p] = a[p] | b[p];
+  } else if (mode === MODE_AND_ROW || !t.reportIds) {
+    for (let p = 0; p < m; p++) hit[p] = a[p] & b[p];
+  } else {
+    const hasA = new Uint8Array(t.nReports), hasB = new Uint8Array(t.nReports);
+    for (let p = 0; p < m; p++) {
+      const r = t.reportIds[at(p)];
+      if (a[p]) hasA[r] = 1;
+      if (b[p]) hasB[r] = 1;
+    }
+    for (let p = 0; p < m; p++) {
+      const r = t.reportIds[at(p)];
+      hit[p] = hasA[r] & hasB[r] & (a[p] | b[p]);
+    }
+  }
+  return { hit, positions: hit };
+}
+
+let currentQuery = null; // { terms, mode, excl, rows }
+
+function readInputs() {
+  const q1 = $("q1").value, q2 = $("q2").value;
+  const terms = [q1, q2].filter(Boolean);
+  const excl = $("excl").value.split(/\s+/).filter(Boolean).sort((x, y) => y.length - x.length);
+  return { terms, mode: $("mode").value, excl, q1, q2 };
+}
+
+let recordTimer = null;
+function runSearch(record = true) {
+  if (!S.table) return;
+  $("mode").disabled = !($("q1").value && $("q2").value);
+  const { terms, mode, excl, q1, q2 } = readInputs();
+  clearTimeout(recordTimer);
+  S.limit = $("showAll").checked ? Infinity : PAGE_STEP;
+
+  if (!terms.length) {
+    currentQuery = null;
+    $("summary").innerHTML = `<b>${fmt(S.table.n)} 行</b>を読み込みました。検索語を入力してください。`;
+    $("summary").className = "";
+    $("results").innerHTML = "";
+    $("more").classList.add("hidden");
+    renderRecent();
+    return;
+  }
+  $("recent").innerHTML = "";
+  $("summary").className = "search-meta";
+
+  const { hit } = computeHits(terms, mode, excl);
+  const rows = [];
+  const sub = S.subset;
+  for (let p = 0; p < hit.length; p++) if (hit[p]) rows.push(sub ? sub[p] : p);
+  const scope = terms.length === 2 ? `「${terms[0]}」と「${terms[1]}」${mode} · ` : "";
+  currentQuery = { terms, excl, rows, scope };
+
+  if (record) {
+    recordTimer = setTimeout(() => recordSearch(currentUser(), terms[0], terms.length === 2 ? terms[1] : "", mode, S.name, rows.length), 700);
+  }
+
+  if (rows.length === 0) {
+    $("summary").innerHTML = `${escapeHtml(scope)}完全一致: 全 0 件`;
+    $("results").innerHTML = '<div class="notice info">完全一致する句は見つかりませんでした。</div>';
+    $("more").classList.add("hidden");
+    return;
+  }
+  S.shown = 0;
+  $("results").innerHTML = "";
+  renderMore();
+}
+
+function renderMore() {
+  const q = currentQuery;
+  if (!q) return;
+  const ctx = Number($("ctxChars").value);
+  const text = S.table.cols[TEXT_COLUMN];
+  const target = S.limit === Infinity ? q.rows.length : Math.min(q.rows.length, S.shown + PAGE_STEP);
+  const cards = [];
+  let shownRows = S.shown;
+  for (let k = S.shown; k < target; k++) {
+    const i = q.rows[k];
+    const t = text[i];
+    const masked = q.excl.length ? maskExcluded(t, q.excl) : t;
+    const spans = [];
+    for (const term of q.terms) for (const sp of findAllLiteral(masked, term)) spans.push(sp);
+    shownRows = k + 1;
+    if (!spans.length) continue;
+    cards.push(`<details class="result-card"><summary><div class="meta">${metaHtml(i)}</div><div class="result-text">${buildSnippet(t, spans, ctx)}</div></summary><div class="full-text">${buildFullText(t, spans)}</div></details>`);
+  }
+  S.shown = shownRows;
+  $("results").insertAdjacentHTML("beforeend", cards.join(""));
+  $("summary").innerHTML = `${escapeHtml(q.scope)}完全一致: 全 ${fmt(q.rows.length)} 件中 ${fmt(S.shown)} 件表示 · 文章をクリックで全文表示`;
+
+  const more = $("more");
+  if (S.shown < q.rows.length) {
+    more.classList.remove("hidden");
+    more.innerHTML = `<button id="moreBtn">さらに ${fmt(Math.min(PAGE_STEP, q.rows.length - S.shown))} 件表示</button><button id="allBtn">残り ${fmt(q.rows.length - S.shown)} 件をすべて表示</button>`;
+    $("moreBtn").onclick = () => renderMore();
+    $("allBtn").onclick = () => { S.limit = Infinity; renderMore(); };
+  } else {
+    more.classList.add("hidden");
+  }
+}
+
+/* =====================================================================
+ * 検索履歴（ユーザー別）
+ * ===================================================================== */
+const entryKey = (e) => [e.query, e.query2 || "", e.mode || ""];
+const keyEq = (a, b) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+const extOf = (x, y) => x.startsWith(y) || y.startsWith(x);
+const isTypingStep = (a, b) => a[2] === b[2] && ((a[1] === b[1] && extOf(a[0], b[0])) || (a[0] === b[0] && extOf(a[1], b[1])));
+
+function recordSearch(user, query, query2, mode, dataset, hits) {
+  const key = [query, query2, query2 ? mode : ""];
+  let entries = store.users[user] || (store.users[user] = []);
+  if (entries.length && keyEq(entryKey(entries[0]), key) && entries[0].dataset === dataset && entries[0].hits === hits) return;
+  const last = S.lastRecorded;
+  if (last && last.user === user && entries.length && keyEq(entryKey(entries[0]), last.key) && isTypingStep(last.key, key)) entries.shift();
+  entries = entries.filter((e) => !keyEq(entryKey(e), key));
+  const d = new Date(), p2 = (n) => String(n).padStart(2, "0");
+  entries.unshift({
+    query, query2, mode: key[2], dataset, hits,
+    at: `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`,
+  });
+  entries.length = Math.min(entries.length, HISTORY_LIMIT);
+  store.users[user] = entries;
+  saveStore();
+  S.lastRecorded = { user, key };
+}
+
+function renderRecent() {
+  const box = $("recent");
+  const user = currentUser();
+  const entries = store.users[user] || [];
+  let html = '<hr><h3>最近の検索</h3>';
+  if (!entries.length) {
+    box.innerHTML = html + `<div class="caption">${escapeHtml(user)} さんの検索履歴はまだありません。</div>`;
+    return;
+  }
+  const row = (e, i) => {
+    const label = e.query2 ? `${e.query} ＋ ${e.query2}` : e.query;
+    return `<div class="recent-row"><button data-i="${i}" title="${escapeHtml(label)}">${escapeHtml(label)}</button><div class="caption">${escapeHtml(e.at)} · ${fmt(e.hits)} 件 · ${escapeHtml(e.dataset)}${e.query2 && e.mode ? " · " + escapeHtml(e.mode) : ""}</div></div>`;
+  };
+  html += entries.slice(0, RECENT_SHOWN).map((e, i) => row(e, i)).join("");
+  if (entries.length > RECENT_SHOWN) {
+    html += `<details><summary class="caption" style="cursor:pointer">さらに過去の履歴（${fmt(entries.length - RECENT_SHOWN)} 件）</summary>${entries.slice(RECENT_SHOWN).map((e, i) => row(e, i + RECENT_SHOWN)).join("")}</details>`;
+  }
+  html += '<div style="margin-top:0.8rem"><button id="clearHistory">履歴を消去</button></div>';
+  box.innerHTML = html;
+  box.querySelectorAll("button[data-i]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const e = entries[Number(b.dataset.i)];
+      $("q1").value = e.query;
+      $("q2").value = e.query2 || "";
+      if (e.mode && modeOptions().includes(e.mode)) $("mode").value = e.mode;
+      runSearch(true);
+    });
+  });
+  $("clearHistory").addEventListener("click", () => {
+    store.users[user] = [];
+    S.lastRecorded = null;
+    saveStore();
+    renderRecent();
+  });
+}
+
+/* =====================================================================
+ * ユーザー・表示設定
+ * ===================================================================== */
+function buildUserUi() {
+  const sel = $("userSelect");
+  const names = Object.keys(store.users);
+  sel.innerHTML = names.concat([NEW_USER_OPTION]).map((n) => `<option>${escapeHtml(n)}</option>`).join("");
+  sel.value = currentUser();
+  $("newUserBox").classList.add("hidden");
+}
+
+function applyUi() {
+  const ui = store.ui;
+  const size = Number(ui.fontSize) || 16;
+  const label = ui.font in FONT_CHOICES ? ui.font : "既定（システム）";
+  let family = FONT_CHOICES[label];
+  if (label === CUSTOM_FONT_LABEL) family = (ui.fontCustom || "").replace(/["';{}<>]/g, "").trim();
+  const names = (family ? [family] : []).concat(["BIZ UDPGothic", "Hiragino Sans", "Yu Gothic"].filter((n) => n !== family));
+  document.documentElement.style.setProperty("--font", names.map((n) => `"${n}"`).join(", ") + ", Meiryo, sans-serif");
+  document.documentElement.style.setProperty("--font-size", size + "px");
+}
+
+function initSettingsUi() {
+  const ui = store.ui;
+  $("fontSelect").innerHTML = Object.keys(FONT_CHOICES).map((k) => `<option>${escapeHtml(k)}</option>`).join("");
+  $("fontSelect").value = ui.font in FONT_CHOICES ? ui.font : "既定（システム）";
+  $("fontCustom").value = ui.fontCustom || "";
+  $("fontCustom").disabled = $("fontSelect").value !== CUSTOM_FONT_LABEL;
+  $("fontSize").value = ui.fontSize || 16;
+  $("fontSizeVal").textContent = $("fontSize").value;
+  $("ctxChars").value = ui.ctx || 45;
+  $("ctxCharsVal").textContent = $("ctxChars").value;
+  $("showAll").checked = !!ui.showAll;
+  applyUi();
+
+  const saveUi = () => {
+    ui.font = $("fontSelect").value;
+    ui.fontCustom = $("fontCustom").value;
+    ui.fontSize = Number($("fontSize").value);
+    ui.ctx = Number($("ctxChars").value);
+    ui.showAll = $("showAll").checked;
+    saveStore();
+    applyUi();
+  };
+  $("fontSelect").addEventListener("change", () => { $("fontCustom").disabled = $("fontSelect").value !== CUSTOM_FONT_LABEL; saveUi(); });
+  $("fontCustom").addEventListener("change", saveUi);
+  $("fontSize").addEventListener("input", () => { $("fontSizeVal").textContent = $("fontSize").value; saveUi(); });
+  $("ctxChars").addEventListener("input", () => { $("ctxCharsVal").textContent = $("ctxChars").value; saveUi(); runSearch(false); });
+  $("showAll").addEventListener("change", () => { saveUi(); runSearch(false); });
+
+  $("userSelect").addEventListener("change", () => {
+    const v = $("userSelect").value;
+    if (v === NEW_USER_OPTION) {
+      $("newUserBox").classList.remove("hidden");
+      $("newUserName").focus();
+      return;
+    }
+    $("newUserBox").classList.add("hidden");
+    store.currentUser = v;
+    S.lastRecorded = null;
+    saveStore();
+    if (!currentQuery) renderRecent();
+  });
+  $("newUserName").addEventListener("input", () => { $("addUser").disabled = !$("newUserName").value.trim(); });
+  const addUser = () => {
+    const name = $("newUserName").value.trim();
+    if (!name) return;
+    if (!store.users[name]) store.users[name] = [];
+    store.currentUser = name;
+    S.lastRecorded = null;
+    saveStore();
+    $("newUserName").value = "";
+    $("addUser").disabled = true;
+    buildUserUi();
+    if (!currentQuery) renderRecent();
+  };
+  $("addUser").addEventListener("click", addUser);
+  $("newUserName").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) addUser(); });
+}
+
+/* =====================================================================
+ * データの読み込み
+ * ===================================================================== */
+function notice(kind, html) {
+  const d = document.createElement("div");
+  d.className = "notice " + kind;
+  d.innerHTML = html;
+  $("notices").appendChild(d);
+}
+
+function setTable(name, cols, extraMeta) {
+  S.name = name;
+  S.table = buildTable(cols);
+  S.shown = 0;
+  currentQuery = null;
+  $("notices").innerHTML = "";
+  const missing = EXPECTED_COLUMNS.filter((c) => !cols[c]);
+  if (missing.length) notice("warn", "次の列がファイルにありません（該当する表示・絞り込みは省略されます）: " + escapeHtml(missing.join(", ")));
+  $("dropzone").classList.add("hidden");
+  $("databar").classList.remove("hidden");
+  $("dataName").textContent = name;
+  $("dataMeta").textContent = `${fmt(S.table.n)} 行${extraMeta ? " · " + extraMeta : ""}`;
+  $("searchArea").classList.remove("hidden");
+  buildFilterUi();
+  buildModeUi();
+  runSearch(false);
+}
+
+async function loadFile(file) {
+  const loading = $("loading"), text = $("loadingText");
+  $("notices").innerHTML = "";
+  loading.classList.remove("hidden");
+  text.textContent = "読み込み中…";
+  const onProgress = (rows) => { text.textContent = `読み込み中… ${fmt(rows)} 行`; };
+  try {
+    const lower = file.name.toLowerCase();
+    let cols;
+    if (/\.(xlsx|xlsm)$/.test(lower)) cols = await parseXlsx(file, onProgress);
+    else if (/\.csv$/.test(lower)) cols = await parseCsvFile(file, onProgress);
+    else if (/\.xls$/.test(lower)) throw new Error("古い形式（.xls）には対応していません。Excel で「.xlsx 形式」で保存し直してください。");
+    else throw new Error("Excel（.xlsx）または CSV ファイルを選択してください。");
+
+    if (!cols[TEXT_COLUMN]) {
+      throw new Error(`「${TEXT_COLUMN}」列が見つかりません。次の列を持つファイルを指定してください: ${EXPECTED_COLUMNS.join(", ")}`);
+    }
+    if (cols[TEXT_COLUMN].length === 0) throw new Error("ファイルにデータがありません。");
+    const savedAt = new Date();
+    setTable(file.name, cols, "読み込み " + savedAt.toLocaleString("ja-JP"));
+    try {
+      await idbPut(DB_KEY, { v: CACHE_VERSION, name: file.name, savedAt: savedAt.getTime(), cols });
+    } catch (e) {
+      notice("warn", "データをこのブラウザに保存できませんでした。次回も、もう一度ファイルを選択してください。");
+    }
+  } catch (e) {
+    notice("err", escapeHtml(e.message || String(e)));
+    if (!S.table) $("dropzone").classList.remove("hidden");
+  } finally {
+    loading.classList.add("hidden");
+  }
+}
+
+async function loadCached() {
+  try {
+    const rec = await idbGet(DB_KEY);
+    if (rec && rec.v === CACHE_VERSION && rec.cols && rec.cols[TEXT_COLUMN]) {
+      setTable(rec.name, rec.cols, "前回読み込み " + new Date(rec.savedAt).toLocaleString("ja-JP") + "（このブラウザに保存済み）");
+      return true;
+    }
+  } catch (e) { /* キャッシュが使えない環境では何もしない */ }
+  return false;
+}
+
+function initDataUi() {
+  const input = $("fileInput");
+  const pick = () => input.click();
+  $("dropzone").addEventListener("click", pick);
+  $("dropzone").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+  $("reloadBtn").addEventListener("click", pick);
+  input.addEventListener("change", () => {
+    const f = input.files[0];
+    input.value = "";
+    if (f) loadFile(f);
+  });
+  let depth = 0;
+  window.addEventListener("dragenter", (e) => { e.preventDefault(); depth++; $("dropzone").classList.add("over"); });
+  window.addEventListener("dragleave", () => { depth = Math.max(0, depth - 1); if (!depth) $("dropzone").classList.remove("over"); });
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => {
+    e.preventDefault();
+    depth = 0;
+    $("dropzone").classList.remove("over");
+    const f = e.dataTransfer && e.dataTransfer.files[0];
+    if (f) loadFile(f);
+  });
+}
+
+/* =====================================================================
+ * 起動
+ * ===================================================================== */
+function initSearchUi() {
+  let timer = null;
+  const schedule = () => { clearTimeout(timer); timer = setTimeout(() => runSearch(true), 80); };
+  for (const id of ["q1", "q2", "excl"]) {
+    const el = $(id);
+    el.addEventListener("compositionstart", () => { S.composing = true; });
+    el.addEventListener("compositionend", () => { S.composing = false; schedule(); });
+    el.addEventListener("input", (e) => { if (!e.isComposing && !S.composing) schedule(); });
+  }
+  $("mode").addEventListener("change", () => runSearch(true));
+}
+
+(async function main() {
+  initSettingsUi();
+  buildUserUi();
+  initDataUi();
+  initSearchUi();
+  $("loading").classList.remove("hidden");
+  $("loadingText").textContent = "保存済みのデータを確認中…";
+  await loadCached();
+  $("loading").classList.add("hidden");
+})();
+</script>
+</body>
+</html>
