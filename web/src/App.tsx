@@ -1,7 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
-  DEFAULT_YEAR_FROM, DEFAULT_YEAR_TO, FILTER_COLUMNS, FILTER_LABELS, MODES,
-  datasetLabel, fetchDatasets, fetchTable, filterMask, findHits,
+  DATASET_SEP, DEFAULT_YEAR_FROM, DEFAULT_YEAR_TO, FILTER_COLUMNS, FILTER_LABELS, MODES,
+  datasetLabel, fetchDatasets, fetchTable, fileLabel, filterMask, findHits, splitDataset,
   type Filters, type Mode, type Table,
 } from "./data";
 import { api, type History, type HistoryEntry, type Spec } from "./api";
@@ -37,8 +37,6 @@ const VIEWS = [
   { id: "group", label: "区分別の共起語" },
 ] as const;
 type View = (typeof VIEWS)[number]["id"];
-
-const UPLOAD = "__upload__";
 
 export default function App() {
   const [settings, setSettings] = usePersistent<Settings>("ps.settings", DEFAULT_SETTINGS);
@@ -94,7 +92,11 @@ export default function App() {
         .then((ds) => {
           setDatasets(ds);
           if (select) setDatasetId(select);
-          else setDatasetId((cur) => (ds.some((d) => d.id === cur) ? cur : ds.find((d) => d.id.includes("sentences"))?.id ?? ds[0]?.id ?? ""));
+          else setDatasetId((cur) => {
+            // 前回のファイルのうち、今もあるものだけを残す
+            const kept = splitDataset(cur).filter((x) => ds.some((d) => d.id === x));
+            return kept.length ? kept.join(DATASET_SEP) : ds.find((d) => d.id.includes("sentences"))?.id ?? ds[0]?.id ?? "";
+          });
         })
         .catch((e) => setLoadError(String(e.message ?? e))),
     [setDatasetId],
@@ -129,15 +131,25 @@ export default function App() {
     };
   }, [datasetId]);
 
-  const onUpload = async (f: File | undefined) => {
-    if (!f) return;
+  /** アップロードしたファイルを、いま読み込んでいるデータに追加する（add=false なら置き換える）。 */
+  const onUpload = async (files: FileList | null, add: boolean) => {
+    if (!files?.length) return;
     setLoadError("");
     try {
-      const { id } = await api.upload(f);
-      await refreshDatasets(id);
+      const ids = add ? splitDataset(datasetId) : [];
+      for (const f of Array.from(files)) {
+        const { id } = await api.upload(f);
+        if (!ids.includes(id)) ids.push(id);
+      }
+      await refreshDatasets(ids.join(DATASET_SEP));
     } catch (e) {
       setLoadError(String((e as Error).message ?? e));
     }
+  };
+  const uploadMode = useRef(true);
+  const pickUpload = (add: boolean) => {
+    uploadMode.current = add;
+    fileRef.current?.click();
   };
 
   // ---- 検索（入力は即時、重い計算は後回し） ----
@@ -196,7 +208,9 @@ export default function App() {
     if (r.mode) setMode(r.mode);
     setShowSecond(!!r.query2);
     setShowExcl(!!r.exclude);
-    if (r.dataset && r.dataset !== datasetId && datasets.some((x) => x.id === r.dataset)) setDatasetId(r.dataset);
+    if (r.dataset && r.dataset !== datasetId && splitDataset(r.dataset).every((p) => datasets.some((x) => x.id === p))) {
+      setDatasetId(r.dataset);
+    }
     searchRef.current?.focus();
   };
 
@@ -234,19 +248,9 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <span className="brand">Phrase Search</span>
-        <select
-          className="quiet-select"
-          value={datasetId}
-          onChange={(e) => (e.target.value === UPLOAD ? fileRef.current?.click() : setDatasetId(e.target.value))}
-          aria-label="データセット"
-        >
-          {datasets.map((x) => (
-            <option key={x.id} value={x.id}>{datasetLabel(x.id)}</option>
-          ))}
-          <option value={UPLOAD}>＋ ファイルをアップロード…</option>
-        </select>
-        <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" hidden
-          onChange={(e) => { onUpload(e.target.files?.[0]); e.target.value = ""; }} />
+        <DataMenu datasets={datasets} value={datasetId} onChange={setDatasetId} table={table} onUpload={pickUpload} />
+        <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" multiple hidden
+          onChange={(e) => { onUpload(e.target.files, uploadMode.current); e.target.value = ""; }} />
         <span className="spacer" />
         <UserMenu
           user={user}
@@ -358,7 +362,9 @@ export default function App() {
           <div className="status" aria-live="polite">
             {loadError ? <span className="error">{loadError}</span>
               : !table ? <span className="muted">読み込み中…</span>
-              : <span className="muted"><b className="num">{pool.toLocaleString()}</b> 行が対象（全 {table.n.toLocaleString()} 行）</span>}
+              : <span className="muted"><b className="num">{pool.toLocaleString()}</b> 行が対象（全 {table.n.toLocaleString()} 行
+                {table.sources.length > 1 && <>・{table.sources.length} ファイル</>}
+                {table.sources.some((x) => x.dropped) && <>・重複 {table.sources.reduce((a, x) => a + x.dropped, 0).toLocaleString()} 行を除外</>}）</span>}
           </div>
         )}
 
@@ -402,6 +408,58 @@ export default function App() {
 }
 
 // ---------------------------------------------------------------------------
+
+/** データの選択。チェックしたファイルを、チェックした順につないで1つのデータとして検索する。 */
+function DataMenu({ datasets, value, onChange, table, onUpload }: {
+  datasets: { id: string; size: number }[]; value: string; onChange: (id: string) => void;
+  table: Table | null; onUpload: (add: boolean) => void;
+}) {
+  const { open, setOpen, close, ref } = usePopover();
+  const chosen = splitDataset(value);
+  const toggle = (id: string) => {
+    const next = chosen.includes(id) ? chosen.filter((x) => x !== id) : [...chosen, id];
+    if (next.length) onChange(next.join(DATASET_SEP));
+  };
+  const info = (id: string) => {
+    const name = id.split("/").pop();
+    return table && chosen.length > 1 ? table.sources.find((x) => x.name === name) : undefined;
+  };
+  return (
+    <div className="pop-anchor" ref={ref}>
+      <button className="quiet-select data-btn" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label="データ">
+        {chosen.length ? fileLabel(chosen[0]) : "データを選択"}
+        {chosen.length > 1 && <span className="pill">＋{chosen.length - 1}</span>}
+        <span className="caret">▾</span>
+      </button>
+      {open && (
+        <div className="popover data-pop">
+          <div className="pop-hint muted">チェックしたファイルをまとめて検索します（前のファイルと重複する行は除きます）</div>
+          <div className="pop-list">
+            {datasets.map((x) => {
+              const k = chosen.indexOf(x.id);
+              const s = info(x.id);
+              return (
+                <label key={x.id} className="pop-item">
+                  <input type="checkbox" checked={k >= 0} disabled={k >= 0 && chosen.length === 1} onChange={() => toggle(x.id)} />
+                  <span className="data-name">{fileLabel(x.id)}</span>
+                  {s && (
+                    <span className="muted small num">
+                      {s.rows.toLocaleString()} 行{s.dropped > 0 && `（重複 ${s.dropped.toLocaleString()} 行を除外）`}
+                    </span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+          <div className="pop-foot">
+            <button className="link" onClick={() => { onUpload(true); close(); }}>＋ ファイルを追加…</button>
+            <button className="link" onClick={() => { onUpload(false); close(); }}>ファイルを開く…</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function UserMenu({ user, users, onPick, onAdd }: {
   user: string; users: string[]; onPick: (u: string) => void; onAdd: (name: string) => void;

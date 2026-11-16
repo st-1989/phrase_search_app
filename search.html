@@ -167,6 +167,10 @@ kbd {
 .status .big { font-size: 1.35em; }
 .status .pill { margin-left: 0.5rem; font-size: 0.8em; padding: 0.05rem 0.55rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
 .status .hint { font-size: 0.78em; color: var(--muted); display: inline-flex; gap: 0.35rem; align-items: center; }
+.file-list { display: flex; flex-wrap: wrap; gap: 0.35rem 0.9rem; margin: 0.6rem 0 0; font-size: 0.85em; color: var(--muted); }
+.file-list .file { display: inline-flex; align-items: center; gap: 0.3rem; }
+.file-list .file b { color: var(--text); font-weight: 600; }
+.file-list .icon-btn { padding: 0 0.25rem; }
 .notice { margin: 0.6rem 0 0; padding: 0.5rem 0.8rem; border-radius: 8px; background: var(--warn); font-size: 0.85em; }
 .notice.err { background: rgba(198, 40, 40, 0.12); color: #c62828; }
 
@@ -221,6 +225,7 @@ progress { width: 100%; height: 0.4rem; margin-top: 0.4rem; accent-color: var(--
   <header class="topbar">
     <span class="brand">Phrase Search</span>
     <span class="data-label" id="dataLabel"></span>
+    <button class="link hidden" id="addBtn" title="今のデータに、別のファイルの行を加えます">＋ ファイルを追加</button>
     <button class="link" id="openBtn">ファイルを開く</button>
     <span class="spacer"></span>
     <div class="pop-anchor" id="settingsAnchor">
@@ -281,9 +286,10 @@ progress { width: 100%; height: 0.4rem; margin-top: 0.4rem; accent-color: var(--
       </div>
     </section>
 
+    <div class="file-list hidden" id="fileList" aria-label="読み込んだファイル"></div>
     <div id="notices"></div>
     <div class="dropzone" id="dropzone" tabindex="0" role="button">
-      <p><b>Excel（.xlsx）または CSV ファイルをここにドロップ</b>、またはクリックして選択</p>
+      <p><b>Excel（.xlsx）または CSV ファイルをここにドロップ</b>、またはクリックして選択（複数可）</p>
       <p class="muted" style="font-size: 0.85em">ファイルはこのブラウザの中だけで読み込まれ、外部には送信されません。</p>
     </div>
     <progress id="progress" class="hidden"></progress>
@@ -293,7 +299,7 @@ progress { width: 100%; height: 0.4rem; margin-top: 0.4rem; accent-color: var(--
     <div id="recent"></div>
   </main>
 </div>
-<input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv,text/csv" hidden>
+<input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv,text/csv" multiple hidden>
 
 <script>
 "use strict";
@@ -304,14 +310,15 @@ progress { width: 100%; height: 0.4rem; margin-top: 0.4rem; accent-color: var(--
 const TEXT_COLUMN = "本文";
 const YEAR_COLUMN = "年(CDEX)";
 const RATING_COLUMN = "発行体格付(業務)";
+const SOURCE_COLUMN = "ファイル";  // 複数ファイルを読み込んだときだけ作る列（行の元のファイル名）
 const EXPECTED_COLUMNS = [
   "発行体ID(業務)", "発行体コード(業務)", "証券コード(CDEX)", YEAR_COLUMN, "公表日(CDEX)",
   "発行体名(CDEX)", "発行体名(業務)", "業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)",
   "公表日(業務)", RATING_COLUMN, "格付の方向性(業務)", "格付アクション(業務)", "タグ", TEXT_COLUMN,
 ];
-const FILTER_COLUMNS = [RATING_COLUMN, "業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)", "格付アクション(業務)"];
+const FILTER_COLUMNS = [SOURCE_COLUMN, RATING_COLUMN, "業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)", "格付アクション(業務)"];
 const FILTER_LABELS = {
-  [RATING_COLUMN]: "格付", "業種(業務)": "業種", "担当部署(業務)": "担当部署",
+  [SOURCE_COLUMN]: "ファイル", [RATING_COLUMN]: "格付", "業種(業務)": "業種", "担当部署(業務)": "担当部署",
   "担当アナリスト(CDEX)": "担当", "格付アクション(業務)": "アクション",
 };
 const RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
@@ -327,7 +334,8 @@ const FONTS = ["BIZ UDPGothic", "Hiragino Sans", "Yu Gothic", "Meiryo", "BIZ UDP
 const DEFAULT_SETTINGS = { fontSize: 18, context: 45, font: "BIZ UDPGothic", theme: "auto" };
 const RECENT_MAX = 30, RECENT_SHOWN = 12;
 const OVERSCAN = 6;
-const DB_NAME = "phraseSearch", DB_STORE = "datasets", DB_KEY = "current", CACHE_VERSION = 1;
+const DB_NAME = "phraseSearch", DB_STORE = "datasets", CACHE_VERSION = 1;
+const DB_KEY_FILES = "files", DB_KEY_LEGACY = "current";  // files: 読み込んだファイルの一覧（current は 1 ファイルだけの旧形式）
 
 /* =====================================================================
  * 小さなユーティリティ
@@ -699,7 +707,8 @@ async function idbPut(key, value) {
  * 状態・テーブル
  * ===================================================================== */
 const S = {
-  name: "",
+  files: [],             // 読み込んだファイル [{ name, savedAt, cols }]（読み込んだ順）
+  sources: [],           // ファイルごとの { name, rows, dropped }（dropped: 前のファイルと重複して除いた行数）
   table: null,           // { n, cols, text, years, reportIds, nReports, fvalues, fcodes }
   filters: { year: null, sel: {} },
   mask: null,            // 絞り込みに合う行（null は全行）
@@ -767,6 +776,41 @@ function buildTable(cols) {
     t.fcodes[c] = codes;
   }
   return t;
+}
+
+/** 重複の判定に使う列（発行体ID＋公表日＋本文。ID・公表日が無ければ、全列）。server/main.py と同じ。 */
+function dedupKeyColumns(names) {
+  const date = ["公表日(業務)", "公表日(CDEX)"].find((c) => names.includes(c));
+  return names.includes("発行体ID(業務)") && date ? ["発行体ID(業務)", date, TEXT_COLUMN] : names;
+}
+
+/** 複数ファイルの列を縦につなぐ。前のファイルにすでにある行は、後のファイルから除く（同じファイルの中の重複は残す）。 */
+function mergeFiles(files) {
+  if (files.length === 1) {
+    return { cols: files[0].cols, sources: [{ name: files[0].name, rows: files[0].cols[TEXT_COLUMN].length, dropped: 0 }] };
+  }
+  const names = EXPECTED_COLUMNS.filter((c) => files.some((f) => f.cols[c]));
+  const keyCols = dedupKeyColumns(names);
+  const cols = Object.fromEntries(names.map((c) => [c, []]));
+  cols[SOURCE_COLUMN] = [];
+  const seen = new Set();
+  const sources = [];
+  for (const f of files) {
+    const n = f.cols[TEXT_COLUMN].length;
+    const get = (c, i) => (f.cols[c] ? f.cols[c][i] ?? "" : "");
+    const mine = [];
+    let dropped = 0;
+    for (let i = 0; i < n; i++) {
+      const key = keyCols.map((c) => get(c, i)).join("\u0001");
+      if (seen.has(key)) { dropped++; continue; }
+      mine.push(key);
+      for (const c of names) cols[c].push(get(c, i));
+      cols[SOURCE_COLUMN].push(f.name);
+    }
+    for (const k of mine) seen.add(k);
+    sources.push({ name: f.name, rows: n - dropped, dropped });
+  }
+  return { cols, sources };
 }
 
 function yearBounds() {
@@ -1015,7 +1059,7 @@ function metaHtml(row) {
   const c = S.table.cols;
   const g = (col) => (c[col] ? c[col][row] || "" : "");
   const rating = [g(RATING_COLUMN), g("格付の方向性(業務)")].filter(Boolean).join(" ");
-  const rest = [g(YEAR_COLUMN), g("公表日(CDEX)"), g("業種(業務)"), g("格付アクション(業務)"), g("担当アナリスト(CDEX)")].filter(Boolean);
+  const rest = [g(YEAR_COLUMN), g("公表日(CDEX)"), g("業種(業務)"), g("格付アクション(業務)"), g("担当アナリスト(CDEX)"), g(SOURCE_COLUMN)].filter(Boolean);
   return `<div class="meta"><span class="issuer">${esc(g("発行体名(CDEX)"))}</span>${rating ? `<span class="rating">${esc(rating)}</span>` : ""}<span class="meta-rest">${esc(rest.join(" · "))}</span></div>`;
 }
 
@@ -1226,7 +1270,7 @@ function scheduleRecord() {
   clearTimeout(recordTimer);
   const q = $("q").value, q2 = $("q2").value, excl = $("excl").value, mode = S.mode;
   if (!S.hits || !q) return;
-  const hits = S.hits.length, dataset = S.name;
+  const hits = S.hits.length, dataset = S.files.map((f) => f.name).join(" ＋ ");
   recordTimer = setTimeout(() => {
     const entry = { q, q2, mode, excl, hits, at: Date.now(), dataset };
     let rest = S.recent.filter((r) => !(r.q === q && r.q2 === q2 && r.excl === excl && r.mode === mode));
@@ -1263,45 +1307,94 @@ function notice(kind, html) {
   $("notices").appendChild(d);
 }
 
-function setTable(name, cols, extra) {
-  S.name = name;
+/** S.files をつないで表を作り直す。extra はデータ名の横に出す補足。 */
+function setFiles(files, extra) {
+  S.files = files;
+  if (!files.length) {
+    S.table = null;
+    S.sources = [];
+    $("dataLabel").textContent = "";
+    $("fileList").classList.add("hidden");
+    $("addBtn").classList.add("hidden");
+    $("searchBox").classList.add("hidden");
+    $("results").classList.add("hidden");
+    $("recent").innerHTML = "";
+    $("notices").innerHTML = "";
+    $("dropzone").classList.remove("hidden");
+    renderStatus();
+    return;
+  }
+  const { cols, sources } = mergeFiles(files);
+  S.sources = sources;
   S.table = buildTable(cols);
   S.error = "";
   S.loadingText = "";
   $("notices").innerHTML = "";
-  const missing = EXPECTED_COLUMNS.filter((c) => !cols[c]);
-  if (missing.length) notice("", "次の列がファイルにありません（該当する表示・絞り込みは省略されます）: " + esc(missing.join(", ")));
+  for (const f of files) {
+    const missing = EXPECTED_COLUMNS.filter((c) => !f.cols[c]);
+    if (missing.length) notice("", (files.length > 1 ? esc(f.name) + ": " : "") + "次の列がファイルにありません（該当する表示・絞り込みは省略されます）: " + esc(missing.join(", ")));
+  }
   $("dropzone").classList.add("hidden");
   $("searchBox").classList.remove("hidden");
-  $("dataLabel").textContent = `${name} · ${fmt(S.table.n)} 行${extra ? " · " + extra : ""}`;
-  $("openBtn").textContent = "データを更新";
+  $("addBtn").classList.remove("hidden");
+  const name = files.length > 1 ? `${files.length} ファイル` : files[0].name;
+  const dropped = sources.reduce((a, x) => a + x.dropped, 0);
+  $("dataLabel").textContent = `${name} · ${fmt(S.table.n)} 行${dropped ? `（重複 ${fmt(dropped)} 行を除外）` : ""}${extra ? " · " + extra : ""}`;
+  renderFileList();
   buildFilterUi();
   renderModeSeg();
   refresh();
 }
 
-async function loadFile(file) {
-  S.error = "";
-  S.loadingText = "読み込み中…";
-  $("progress").classList.remove("hidden");
-  renderStatus();
-  const onProgress = (rows) => { S.loadingText = `読み込み中… ${fmt(rows)} 行`; renderStatus(); };
+function renderFileList() {
+  const el = $("fileList");
+  el.classList.toggle("hidden", S.files.length < 2);
+  if (S.files.length < 2) { el.innerHTML = ""; return; }
+  el.innerHTML = S.sources.map((x, i) =>
+    `<span class="file"><b>${esc(x.name)}</b> ${fmt(x.rows)} 行${x.dropped ? `（重複 ${fmt(x.dropped)} 行を除外）` : ""}` +
+    `<button class="icon-btn faint" data-remove="${i}" aria-label="${esc(x.name)} を外す" title="このファイルを外す">×</button></span>`,
+  ).join("");
+}
+
+async function saveFiles() {
   try {
-    const lower = file.name.toLowerCase();
-    let cols;
-    if (/\.(xlsx|xlsm)$/.test(lower)) cols = await parseXlsx(file, onProgress);
-    else if (/\.csv$/.test(lower)) cols = await parseCsvFile(file, onProgress);
-    else if (/\.xls$/.test(lower)) throw new Error("古い形式（.xls）には対応していません。Excel で「.xlsx 形式」で保存し直してください。");
-    else throw new Error("Excel（.xlsx）または CSV ファイルを選択してください。");
-    if (!cols[TEXT_COLUMN]) throw new Error(`「${TEXT_COLUMN}」列が見つかりません。次の列を持つファイルを指定してください: ${EXPECTED_COLUMNS.join(", ")}`);
-    if (cols[TEXT_COLUMN].length === 0) throw new Error("ファイルにデータがありません。");
-    const savedAt = new Date();
-    setTable(file.name, cols, "読み込み " + savedAt.toLocaleString("ja-JP"));
-    try {
-      await idbPut(DB_KEY, { v: CACHE_VERSION, name: file.name, savedAt: savedAt.getTime(), cols });
-    } catch (e) {
-      notice("", "データをこのブラウザに保存できませんでした。次回も、もう一度ファイルを選択してください。");
+    await idbPut(DB_KEY_FILES, { v: CACHE_VERSION, files: S.files });
+  } catch (e) {
+    notice("", "データをこのブラウザに保存できませんでした。次回も、もう一度ファイルを選択してください。");
+  }
+}
+
+async function parseFile(file, onProgress) {
+  const lower = file.name.toLowerCase();
+  let cols;
+  if (/\.(xlsx|xlsm)$/.test(lower)) cols = await parseXlsx(file, onProgress);
+  else if (/\.csv$/.test(lower)) cols = await parseCsvFile(file, onProgress);
+  else if (/\.xls$/.test(lower)) throw new Error("古い形式（.xls）には対応していません。Excel で「.xlsx 形式」で保存し直してください。");
+  else throw new Error("Excel（.xlsx）または CSV ファイルを選択してください。");
+  if (!cols[TEXT_COLUMN]) throw new Error(`「${TEXT_COLUMN}」列が見つかりません。次の列を持つファイルを指定してください: ${EXPECTED_COLUMNS.join(", ")}`);
+  if (cols[TEXT_COLUMN].length === 0) throw new Error("ファイルにデータがありません。");
+  return cols;
+}
+
+/** ファイルを読み込む。add=true なら今のデータに加え（同じ名前のファイルは新しい内容に置き換え）、false なら置き換える。 */
+async function loadFiles(fileList, add) {
+  const list = [...fileList];
+  if (!list.length) return;
+  S.error = "";
+  $("progress").classList.remove("hidden");
+  const files = add ? [...S.files] : [];
+  try {
+    for (const file of list) {
+      const label = list.length > 1 ? `${file.name} を読み込み中…` : "読み込み中…";
+      S.loadingText = label;
+      renderStatus();
+      const cols = await parseFile(file, (rows) => { S.loadingText = `${label} ${fmt(rows)} 行`; renderStatus(); });
+      const entry = { name: file.name, savedAt: Date.now(), cols };
+      const at = files.findIndex((f) => f.name === file.name);
+      if (at >= 0) files[at] = entry; else files.push(entry);
     }
+    setFiles(files, "読み込み " + new Date().toLocaleString("ja-JP"));
+    await saveFiles();
   } catch (e) {
     S.loadingText = "";
     S.error = e.message || String(e);
@@ -1314,9 +1407,16 @@ async function loadFile(file) {
 
 async function loadCached() {
   try {
-    const rec = await idbGet(DB_KEY);
-    if (rec && rec.v === CACHE_VERSION && rec.cols && rec.cols[TEXT_COLUMN]) {
-      setTable(rec.name, rec.cols, "前回読み込み " + new Date(rec.savedAt).toLocaleString("ja-JP") + "（このブラウザに保存済み）");
+    const rec = await idbGet(DB_KEY_FILES);
+    if (rec && rec.v === CACHE_VERSION && rec.files && rec.files.length && rec.files.every((f) => f.cols && f.cols[TEXT_COLUMN])) {
+      const last = Math.max(...rec.files.map((f) => f.savedAt));
+      setFiles(rec.files, "前回読み込み " + new Date(last).toLocaleString("ja-JP") + "（このブラウザに保存済み）");
+      return true;
+    }
+    const old = await idbGet(DB_KEY_LEGACY);  // 以前の版で保存した 1 ファイル
+    if (old && old.v === CACHE_VERSION && old.cols && old.cols[TEXT_COLUMN]) {
+      setFiles([{ name: old.name, savedAt: old.savedAt, cols: old.cols }],
+        "前回読み込み " + new Date(old.savedAt).toLocaleString("ja-JP") + "（このブラウザに保存済み）");
       return true;
     }
   } catch (e) { /* キャッシュが使えない環境では何もしない */ }
@@ -1445,15 +1545,24 @@ function initUi() {
   });
 
   // ファイルの読み込み
+  //   「ファイルを開く」は今のデータを置き換え、「＋ ファイルを追加」とドロップは今のデータに加える
   const input = $("fileInput");
-  const pick = () => input.click();
-  $("dropzone").addEventListener("click", pick);
-  $("dropzone").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
-  $("openBtn").addEventListener("click", pick);
+  let addMode = false;
+  const pick = (add) => { addMode = add; input.click(); };
+  $("dropzone").addEventListener("click", () => pick(false));
+  $("dropzone").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(false); } });
+  $("openBtn").addEventListener("click", () => pick(false));
+  $("addBtn").addEventListener("click", () => pick(true));
   input.addEventListener("change", () => {
-    const f = input.files[0];
+    const files = [...input.files];
     input.value = "";
-    if (f) loadFile(f);
+    loadFiles(files, addMode);
+  });
+  $("fileList").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-remove]");
+    if (!b) return;
+    setFiles(S.files.filter((_, i) => i !== Number(b.dataset.remove)));
+    saveFiles();
   });
   let depth = 0;
   window.addEventListener("dragenter", (e) => { e.preventDefault(); depth++; $("dropzone").classList.add("over"); });
@@ -1463,8 +1572,7 @@ function initUi() {
     e.preventDefault();
     depth = 0;
     $("dropzone").classList.remove("over");
-    const f = e.dataTransfer && e.dataTransfer.files[0];
-    if (f) loadFile(f);
+    if (e.dataTransfer && e.dataTransfer.files.length) loadFiles(e.dataTransfer.files, !!S.table);
   });
 
   initResults();

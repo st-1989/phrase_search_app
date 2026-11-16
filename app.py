@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from server.merge import SOURCE_COLUMN, merge_tables
+
 
 st.set_page_config(page_title="Japanese Phrase Search", layout="wide")
 
@@ -103,7 +105,6 @@ details.result-card > summary:hover .context {
 
 APP_DIR = Path(__file__).parent
 DATA_DIRS = [APP_DIR, APP_DIR / "data"]
-UPLOAD_OPTION = "ファイルをアップロード…"
 FILE_PATTERNS = ["*.csv", "*.xlsx", "*.xls"]
 
 # 入力ファイルのフォーマット（この列名で読み込む。検索対象は TEXT_COLUMN のみ）
@@ -185,9 +186,15 @@ def load_local_file(path: str, mtime_ns: int) -> pd.DataFrame:
     return df
 
 
-@st.cache_resource(show_spinner="読み込み中…", max_entries=3)
+@st.cache_resource(show_spinner="読み込み中…", max_entries=5)
 def load_uploaded(file_bytes: bytes, filename: str) -> pd.DataFrame:
     return finalize_table(parse_table(file_bytes, filename))
+
+
+@st.cache_resource(show_spinner="ファイルをまとめています…", max_entries=3)
+def merge_cached(key: tuple, _tables: list[tuple[str, pd.DataFrame]]) -> tuple[pd.DataFrame, list[dict]]:
+    """複数ファイルを1つの表にまとめる（前のファイルと重複する行は除く）。key はファイルの組（名前と更新時刻など）。"""
+    return merge_tables(_tables)
 
 
 def normalize_text(text: str, use_nfkc: bool, ignore_spaces: bool) -> str:
@@ -385,6 +392,7 @@ def meta_html(row: pd.Series) -> str:
         ("アクション", v("格付アクション(業務)")),
         ("担当", v("担当アナリスト(CDEX)")),
         ("タグ", v("タグ")),
+        ("ファイル", v(SOURCE_COLUMN)),
     ]
     return " · ".join(f"{label} {val}".strip() for label, val in items if val and val != "<b></b>")
 
@@ -1051,32 +1059,56 @@ st.markdown(font_css(ui) + CSS, unsafe_allow_html=True)
 
 local_files = list_local_files()
 dataset_labels = {str(path.relative_to(APP_DIR)): path for path in local_files}
-dataset = st.selectbox("データセット", list(dataset_labels) + [UPLOAD_OPTION])
+default_dataset = next((k for k in dataset_labels if "sentences" in k), next(iter(dataset_labels), None))
+chosen_datasets = st.multiselect(
+    "データセット（複数選ぶと、まとめて検索します。前のファイルと重複する行は除きます）",
+    list(dataset_labels),
+    default=[default_dataset] if default_dataset else [],
+)
+with st.expander("ファイルをアップロードして追加", expanded=not chosen_datasets):
+    uploads = st.file_uploader("CSV / Excelファイル（複数可）", type=["csv", "xlsx", "xls"], accept_multiple_files=True)
 
+# (表示名, 表, キャッシュのキー) を、選んだ順・アップロード順に並べる
+tables: list[tuple[str, pd.DataFrame]] = []
+cache_key: list[tuple] = []
 try:
-    if dataset == UPLOAD_OPTION:
-        uploaded = st.file_uploader("CSV / Excelファイル", type=["csv", "xlsx", "xls"])
-        if uploaded is None:
-            st.info("CSV または Excel ファイルをアップロードしてください。")
-            st.stop()
-        df = load_uploaded(uploaded.getvalue(), uploaded.name)
-    else:
-        path = dataset_labels[dataset]
-        df = load_local_file(str(path), path.stat().st_mtime_ns)
+    for label in chosen_datasets:
+        path = dataset_labels[label]
+        mtime = path.stat().st_mtime_ns
+        tables.append((path.name, load_local_file(str(path), mtime)))
+        cache_key.append((str(path), mtime))
+    for up in uploads or []:
+        tables.append((up.name, load_uploaded(up.getvalue(), up.name)))
+        cache_key.append((up.name, up.file_id))
 except Exception as exc:
     st.error(str(exc))
     st.stop()
 
-if TEXT_COLUMN not in df.columns:
+if not tables:
+    st.info("データセットを選ぶか、CSV / Excel ファイルをアップロードしてください。")
+    st.stop()
+
+no_text = [name for name, t in tables if TEXT_COLUMN not in t.columns]
+if no_text:
     st.error(
-        f"「{TEXT_COLUMN}」列が見つかりません。次の列を持つファイルを指定してください: "
+        f"{', '.join(no_text)}: 「{TEXT_COLUMN}」列が見つかりません。次の列を持つファイルを指定してください: "
         + ", ".join(EXPECTED_COLUMNS)
     )
     st.stop()
 
-missing = [c for c in dict.fromkeys(EXPECTED_COLUMNS) if c not in df.columns]
-if missing:
-    st.warning("次の列がファイルにありません（該当する表示・絞り込みは省略されます）: " + ", ".join(missing))
+for name, t in tables:
+    missing = [c for c in dict.fromkeys(EXPECTED_COLUMNS) if c not in t.columns]
+    if missing:
+        prefix = f"{name}: " if len(tables) > 1 else ""
+        st.warning(prefix + "次の列がファイルにありません（該当する表示・絞り込みは省略されます）: " + ", ".join(missing))
+
+df, sources = merge_cached(tuple(cache_key), tables)
+dataset = " ＋ ".join(name for name, _ in tables) if len(tables) > 1 else (chosen_datasets[0] if chosen_datasets else tables[0][0])
+if len(sources) > 1:
+    st.caption(
+        f"{len(sources)} ファイル・{len(df):,} 行: "
+        + " / ".join(f"{x['name']} {x['rows']:,} 行" + (f"（重複 {x['dropped']:,} 行を除外）" if x["dropped"] else "") for x in sources)
+    )
 
 if df.empty:
     st.warning("ファイルにデータがありません。")
@@ -1123,7 +1155,7 @@ with st.sidebar:
         else:
             st.caption(f"{YEAR_COLUMN}: {year_min} のみ")
 
-    for col in [RATING_COLUMN] + MULTI_FILTER_COLUMNS:
+    for col in [SOURCE_COLUMN, RATING_COLUMN] + MULTI_FILTER_COLUMNS:
         if col not in df.columns:
             continue
         options = group_order(df[col].dropna().unique(), col)  # 格付符号は AAA→D の順
@@ -1156,7 +1188,7 @@ def recent_searches(user: str | None) -> None:
         q2, mode = e.get("query2", ""), e.get("mode", "")
         label = f'{e["query"]} ＋ {q2}' if q2 else e["query"]
         c1.button(label, key=f"recent_{i}", on_click=set_query, args=(e["query"], q2, mode), use_container_width=True)
-        c2.caption(f'{e["at"]} · {e["hits"]:,} 件 · {e["dataset"]}' + (f" · {mode}" if q2 and mode else ""))
+        c2.caption(f'{e["at"]} · {e["hits"]:,} 件 · {e["dataset"].replace("|", " ＋ ")}' + (f" · {mode}" if q2 and mode else ""))
 
     for i, e in enumerate(entries[:RECENT_SHOWN]):
         row(i, e)

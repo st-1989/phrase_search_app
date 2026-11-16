@@ -2,12 +2,19 @@
 
 export type Value = string | number | null;
 type EncodedColumn = { values: Value[]; codes: number[] } | { raw: Value[] };
-type Payload = { rows: number; columns: string[]; data: Record<string, EncodedColumn> };
+/** 複数ファイルをまとめたときの、ファイルごとの行数と、前のファイルと重複して除いた行数。 */
+export type SourceInfo = { name: string; rows: number; dropped: number };
+type Payload = { rows: number; columns: string[]; data: Record<string, EncodedColumn>; sources?: SourceInfo[] };
 
 export const TEXT_COLUMN = "本文";
 export const YEAR_COLUMN = "年(CDEX)";
 export const RATING_COLUMN = "発行体格付(業務)";
+/** 複数ファイルをまとめたときだけある列（行の元のファイル名）。 */
+export const SOURCE_COLUMN = "ファイル";
+/** 複数ファイルをまとめたデータセットの id は、各ファイルの id をこれでつなぐ（server/main.py と同じ）。 */
+export const DATASET_SEP = "|";
 export const FILTER_COLUMNS = [
+  SOURCE_COLUMN,
   RATING_COLUMN,
   "業種(業務)",
   "担当部署(業務)",
@@ -16,6 +23,7 @@ export const FILTER_COLUMNS = [
 ];
 export const FILTER_LABELS: Record<string, string> = {
   [YEAR_COLUMN]: "年",
+  [SOURCE_COLUMN]: "ファイル",
   [RATING_COLUMN]: "格付",
   "業種(業務)": "業種",
   "担当部署(業務)": "担当部署",
@@ -37,9 +45,11 @@ export class Table {
   readonly text: string[];
   /** レポート（発行体ID＋公表日）の番号。レポートを識別できなければ null。 */
   readonly reportId: Int32Array | null;
+  readonly sources: SourceInfo[];
 
   constructor(p: Payload) {
     this.n = p.rows;
+    this.sources = p.sources ?? [];
     this.columns = p.columns;
     for (const c of p.columns) {
       const e = p.data[c];
@@ -274,6 +284,14 @@ export function compareValues(col: string, a: Value, b: Value): number {
   return sa < sb ? -1 : sa > sb ? 1 : 0;
 }
 
-export function datasetLabel(id: string) {
+export function splitDataset(id: string): string[] {
+  return id.split(DATASET_SEP).filter(Boolean);
+}
+
+export function fileLabel(id: string) {
   return id.startsWith(".cache/uploads/") ? "アップロード: " + id.slice(".cache/uploads/".length) : id;
+}
+
+export function datasetLabel(id: string) {
+  return splitDataset(id).map(fileLabel).join(" ＋ ");
 }

@@ -258,6 +258,10 @@ kbd {
 }
 .pop-item:hover { background: var(--bg); }
 .pop-item input { accent-color: var(--accent); width: 1rem; height: 1rem; }
+.data-btn { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+.data-pop { min-width: 22rem; max-width: 34rem; }
+.data-name { flex: 1; overflow-wrap: anywhere; }
+.pop-hint { font-size: 0.82em; padding: 0.15rem 0.45rem 0.4rem; }
 .pop-foot { display: flex; justify-content: space-between; padding: 0.4rem 0.35rem 0.1rem; border-top: 1px solid var(--border); margin-top: 0.35rem; }
 
 .year-pop { min-width: 17rem; }

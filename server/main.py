@@ -17,6 +17,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .merge import merge_tables
+
 ROOT = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = ROOT / ".cache" / "uploads"  # 画面からアップロードしたファイル
 DATA_DIRS = [ROOT, ROOT / "data", UPLOAD_DIR]
@@ -33,6 +35,7 @@ EXPECTED_COLUMNS = [
     "公表日(業務)", "発行体格付(業務)", "格付の方向性(業務)", "格付アクション(業務)", "タグ", TEXT_COLUMN,
 ]
 MULTI_FILTER_COLUMNS = ["業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)", "格付アクション(業務)"]
+DATASET_SEP = "|"  # 複数ファイルをまとめたデータセットの id は、各ファイルの id をこれでつなぐ
 
 
 def list_local_files() -> list[Path]:
@@ -102,21 +105,33 @@ def encode_column(s: pd.Series) -> dict:
     return {"raw": [clean(v) for v in s.astype(object).tolist()]}
 
 
+DatasetKey = tuple[tuple[str, int], ...]  # ((ファイルのパス, 更新時刻), ...)
+
+
 @lru_cache(maxsize=4)
-def cached_table(path_str: str, mtime_ns: int) -> pd.DataFrame:
+def cached_merged(key: DatasetKey) -> tuple[pd.DataFrame, list[dict]]:
     """読み込んだ表を覚えておく（分析のたびに読み直さない）。読み取り専用で使う。"""
-    return load_local_file(Path(path_str))
+    tables = []
+    for path_str, _ in key:
+        df = load_local_file(Path(path_str))
+        if TEXT_COLUMN not in df.columns:
+            raise HTTPException(400, f"{Path(path_str).name}: 「{TEXT_COLUMN}」列が見つかりません。")
+        tables.append((Path(path_str).name, df))
+    return merge_tables(tables)
+
+
+def cached_table(key: DatasetKey) -> pd.DataFrame:
+    return cached_merged(key)[0]
 
 
 @lru_cache(maxsize=4)
-def dataset_payload(path_str: str, mtime_ns: int) -> bytes:
-    df = cached_table(path_str, mtime_ns)
-    if TEXT_COLUMN not in df.columns:
-        raise HTTPException(400, f"「{TEXT_COLUMN}」列が見つかりません。")
+def dataset_payload(key: DatasetKey) -> bytes:
+    df, info = cached_merged(key)
     body = {
         "rows": len(df),
         "columns": list(df.columns),
         "data": {c: encode_column(df[c]) for c in df.columns},
+        "sources": info,
     }
     return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
@@ -134,20 +149,19 @@ def datasets() -> list[dict]:
     return [{"id": k, "size": p.stat().st_size} for k, p in _datasets().items()]
 
 
+def _resolve(id: str) -> DatasetKey:
+    """データセットの id（複数ファイルなら DATASET_SEP でつないだもの）を、ファイルと更新時刻の組にする。"""
+    known = _datasets()
+    ids = list(dict.fromkeys(x for x in id.split(DATASET_SEP) if x))
+    if not ids or any(x not in known for x in ids):
+        raise HTTPException(404, "データセットが見つかりません。")
+    return tuple((str(known[x]), known[x].stat().st_mtime_ns) for x in ids)
+
+
 @app.get("/api/dataset")
 def dataset(id: str):
-    path = _datasets().get(id)
-    if path is None:
-        raise HTTPException(404, "データセットが見つかりません。")
-    payload = dataset_payload(str(path), path.stat().st_mtime_ns)
+    payload = dataset_payload(_resolve(id))
     return Response(content=payload, media_type="application/json")
-
-
-def _resolve(id: str) -> tuple[Path, int]:
-    path = _datasets().get(id)
-    if path is None:
-        raise HTTPException(404, "データセットが見つかりません。")
-    return path, path.stat().st_mtime_ns
 
 
 @app.post("/api/upload")
@@ -160,7 +174,7 @@ async def upload(request: Request, name: str):
     dest = UPLOAD_DIR / fname
     dest.write_bytes(await request.body())
     try:
-        df = cached_table(str(dest), dest.stat().st_mtime_ns)
+        df = load_local_file(dest)
     except Exception as exc:  # noqa: BLE001
         dest.unlink(missing_ok=True)
         raise HTTPException(400, f"読み込めませんでした: {exc}")
@@ -177,10 +191,10 @@ from . import history as hist  # noqa: E402
 
 
 def _analysis(spec: dict) -> an.Analysis:
-    path, mtime = _resolve(spec.get("dataset", ""))
+    key = _resolve(spec.get("dataset", ""))
     if not [t for t in spec.get("terms", []) if t]:
         raise HTTPException(400, "検索フレーズがありません。")
-    return an.get_analysis((str(path), mtime), cached_table(str(path), mtime), spec)
+    return an.get_analysis(key, cached_table(key), spec)
 
 
 @app.get("/api/capabilities")

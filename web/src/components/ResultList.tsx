@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { YEAR_COLUMN, pieces, spansOf, type Table } from "../data";
+import { SOURCE_COLUMN, YEAR_COLUMN, pieces, spansOf, type Table } from "../data";
 
 export type ResultListHandle = { focusFirst: () => void };
 
@@ -107,7 +107,7 @@ function Meta({ table, row }: { table: Table; row: number }) {
     return x === null || x === "" ? "" : String(x);
   };
   const rating = [g("発行体格付(業務)"), g("格付の方向性(業務)")].filter(Boolean).join(" ");
-  const rest = [g(YEAR_COLUMN), g("公表日(CDEX)"), g("業種(業務)"), g("格付アクション(業務)"), g("担当アナリスト(CDEX)")]
+  const rest = [g(YEAR_COLUMN), g("公表日(CDEX)"), g("業種(業務)"), g("格付アクション(業務)"), g("担当アナリスト(CDEX)"), g(SOURCE_COLUMN)]
     .filter(Boolean);
   return (
     <div className="meta">
