@@ -259,6 +259,47 @@ export function pieces(text: string, spans: [number, number, number][], context:
   return { pieces: out, before: lo > 0, after: hi < text.length };
 }
 
+// ---- 結果の並び ----
+
+/** 格付の順位（AAA が 0、不明は 99）。 */
+function ratingRank(v: Value): number {
+  const i = RATING_ORDER.indexOf(String(v ?? ""));
+  return i < 0 ? 99 : i;
+}
+
+/**
+ * 結果の並び: 年の新しい順 → 格付の高い順（AAA→D）→ 業種（文字順）→ 公表日の新しい順 → 発行体名。
+ * 同じレポートの文は元の並び（文の順）を保つ。
+ */
+export function sortHits(t: Table, rows: Int32Array | number[]): number[] {
+  const year = t.cols[YEAR_COLUMN];
+  const rating = t.cols[RATING_COLUMN];
+  const ind = t.cols["業種(業務)"];
+  const date = t.cols["公表日(CDEX)"];
+  const issuer = t.cols["発行体名(CDEX)"];
+  const val = (c: Col | undefined, i: number): Value => (c && c.codes[i] >= 0 ? c.values[c.codes[i]] : null);
+  const str = (v: Value) => (v === null ? "" : String(v));
+  const cmpStr = (a: string, b: string) => (a === b ? 0 : a === "" ? 1 : b === "" ? -1 : a < b ? -1 : 1);
+  return Array.from(rows).sort((a, b) => {
+    const ya = val(year, a), yb = val(year, b);
+    if (ya !== yb) {
+      if (ya === null) return 1;
+      if (yb === null) return -1;
+      const d = Number(yb) - Number(ya);
+      if (d) return d;
+    }
+    const r = ratingRank(val(rating, a)) - ratingRank(val(rating, b));
+    if (r) return r;
+    const c = cmpStr(str(val(ind, a)), str(val(ind, b)));
+    if (c) return c;
+    const da = str(val(date, a)), db = str(val(date, b));
+    if (da !== db) return da === "" ? 1 : db === "" ? -1 : da < db ? 1 : -1;
+    const n = cmpStr(str(val(issuer, a)), str(val(issuer, b)));
+    if (n) return n;
+    return a - b;
+  });
+}
+
 // ---- 集計の軸 ----
 
 export const GROUP_COLUMNS = [RATING_COLUMN, "格付の方向性(業務)", "格付アクション(業務)", "業種(業務)", YEAR_COLUMN];

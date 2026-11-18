@@ -11,6 +11,7 @@
   --border: #e4e4e0;
   --accent: #3554c8;
   --accent-soft: #eef1fd;
+  --hit: #d70015;
   --mark0: #ffe9a3;
   --mark1: #cfe6ff;
   --mark2: #c8f0d2;
@@ -29,6 +30,7 @@
     --border: #2d2d32;
     --accent: #8ea2ff;
     --accent-soft: #23284a;
+    --hit: #ff6961;
     --mark0: rgba(255, 204, 0, 0.3);
     --mark1: rgba(90, 160, 255, 0.32);
     --mark2: rgba(80, 200, 120, 0.3);
@@ -47,6 +49,7 @@
   --border: #2d2d32;
   --accent: #8ea2ff;
   --accent-soft: #23284a;
+  --hit: #ff6961;
   --mark0: rgba(255, 204, 0, 0.3);
   --mark1: rgba(90, 160, 255, 0.32);
   --mark2: rgba(80, 200, 120, 0.3);
@@ -342,11 +345,10 @@ kbd {
   font-size: 0.95em;
 }
 .snippet { margin: 0; line-height: 1.75; word-break: break-word; }
-.snippet .ctx { color: var(--ctx); }
+.snippet .ctx { color: var(--text); }
 .snippet.full { margin-top: 0.4rem; padding: 0.6rem 0.85rem; background: var(--surface); border-radius: 8px; border: 1px solid var(--border); }
-.snippet.full .ctx { color: var(--text); opacity: 0.8; }
-mark { color: var(--text); font-weight: 700; border-radius: 3px; padding: 0 1px; }
-mark.t0 { background: var(--mark0); }
+mark { color: var(--hit); background: transparent; font-weight: 700; border-radius: 3px; padding: 0 1px; }
+/* 2語目以降は赤字のまま、薄い下地で語を見分ける */
 mark.t1 { background: var(--mark1); }
 mark.t2 { background: var(--mark2); }
 

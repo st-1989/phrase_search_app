@@ -18,6 +18,7 @@
   --border: #e4e4e0;
   --accent: #3554c8;
   --accent-soft: #eef1fd;
+  --hit: #d70015;
   --mark0: #ffe9a3;
   --mark1: #cfe6ff;
   --active: #f3f5ff;
@@ -29,14 +30,14 @@
   :root:not([data-theme="light"]) {
     --bg: #141416; --surface: #1c1c1f; --text: #ececef; --muted: #94949b; --ctx: #85858c;
     --faint: #4a4a50; --border: #2d2d32; --accent: #8ea2ff; --accent-soft: #23284a;
-    --mark0: rgba(255, 204, 0, 0.3); --mark1: rgba(90, 160, 255, 0.32); --active: #22243a;
+    --hit: #ff6961; --mark0: rgba(255, 204, 0, 0.3); --mark1: rgba(90, 160, 255, 0.32); --active: #22243a;
     --shadow: 0 8px 28px rgba(0, 0, 0, 0.5); --warn: #3a3320; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #141416; --surface: #1c1c1f; --text: #ececef; --muted: #94949b; --ctx: #85858c;
   --faint: #4a4a50; --border: #2d2d32; --accent: #8ea2ff; --accent-soft: #23284a;
-  --mark0: rgba(255, 204, 0, 0.3); --mark1: rgba(90, 160, 255, 0.32); --active: #22243a;
+  --hit: #ff6961; --mark0: rgba(255, 204, 0, 0.3); --mark1: rgba(90, 160, 255, 0.32); --active: #22243a;
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.5); --warn: #3a3320; color-scheme: dark;
 }
 
@@ -187,11 +188,10 @@ kbd {
 .issuer { color: var(--text); font-weight: 700; font-size: 1.08em; }
 .rating { font-variant-numeric: tabular-nums; color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 0 0.4rem; font-size: 0.95em; }
 .snippet { margin: 0; line-height: 1.75; word-break: break-word; }
-.snippet .ctx { color: var(--ctx); }
+.snippet .ctx { color: var(--text); }
 .snippet.full { margin-top: 0.4rem; padding: 0.6rem 0.85rem; background: var(--surface); border-radius: 8px; border: 1px solid var(--border); }
-.snippet.full .ctx { color: var(--text); opacity: 0.8; }
-mark { color: var(--text); font-weight: 700; border-radius: 3px; padding: 0 1px; }
-mark.t0 { background: var(--mark0); }
+mark { color: var(--hit); background: transparent; font-weight: 700; border-radius: 3px; padding: 0 1px; }
+/* 2語目は赤字のまま、薄い下地で語を見分ける */
 mark.t1 { background: var(--mark1); }
 
 /* ---- 読み込み・最近の検索・空の状態 ---- */
@@ -1014,6 +1014,36 @@ function findHits(terms, mode, excl) {
   return Int32Array.from(out);
 }
 
+/**
+ * 結果の並び: 年の新しい順 → 格付の高い順（AAA→D）→ 業種（文字順）→ 公表日の新しい順 → 発行体名。
+ * 同じレポートの文は元の並び（文の順）を保つ。
+ */
+function sortHits(hits) {
+  const t = S.table, c = t.cols, years = t.years;
+  const col = (name) => c[name] || null;
+  const rating = col(RATING_COLUMN), ind = col("業種(業務)"), issuer = col("発行体名(CDEX)");
+  const date = col("公表日(CDEX)") || col("公表日(業務)");
+  const str = (a, i) => (a ? String(a[i] ?? "") : "");
+  const cmpStr = (x, y) => (x === y ? 0 : x === "" ? 1 : y === "" ? -1 : x < y ? -1 : 1);
+  return Int32Array.from(Array.from(hits).sort((a, b) => {
+    if (years) {
+      const ya = years[a], yb = years[b];
+      const na = Number.isNaN(ya), nb = Number.isNaN(yb);
+      if (na !== nb) return na ? 1 : -1;
+      if (!na && ya !== yb) return yb - ya;
+    }
+    if (rating) {
+      const r = ratingRank(str(rating, a)) - ratingRank(str(rating, b));
+      if (r) return r;
+    }
+    const k = cmpStr(str(ind, a), str(ind, b));
+    if (k) return k;
+    const da = str(date, a), db = str(date, b);
+    if (da !== db) return da === "" ? 1 : db === "" ? -1 : da < db ? 1 : -1;
+    return cmpStr(str(issuer, a), str(issuer, b)) || a - b;
+  }));
+}
+
 /** 一致箇所 [開始, 終了, 何番目の語か]。重なりは結合する。 */
 function spansOf(text, terms, excl) {
   const masked = excl.length ? maskExcluded(text, excl) : text;
@@ -1288,7 +1318,8 @@ function refresh() {
   S.terms = [q, q2].filter(Boolean);
   S.excl = sortExcl($("excl").value.split(/\s+/));
   $("clearQ").classList.toggle("hidden", !q);
-  S.hits = S.terms.length ? findHits(S.terms, effectiveMode(), S.excl) : null;
+  // 文の一覧の並び（年の新しい順 → 格付 → 業種）
+  S.hits = S.terms.length ? sortHits(findHits(S.terms, effectiveMode(), S.excl)) : null;
   renderStatus();
   const show = !!(S.hits && S.hits.length);
   $("results").classList.toggle("hidden", !show);

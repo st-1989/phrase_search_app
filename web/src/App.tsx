@@ -1,7 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   DATASET_SEP, DEFAULT_YEAR_FROM, DEFAULT_YEAR_TO, FILTER_COLUMNS, FILTER_LABELS, MODES,
-  datasetLabel, fetchDatasets, fetchTable, fileLabel, filterMask, findHits, splitDataset,
+  datasetLabel, fetchDatasets, fetchTable, fileLabel, filterMask, findHits, sortHits, splitDataset,
   type Filters, type Mode, type Table,
 } from "./data";
 import { api, type History, type HistoryEntry, type Spec } from "./api";
@@ -174,6 +174,8 @@ export default function App() {
     () => (d.table && d.terms.length ? findHits(d.table, d.terms, d.mode, d.exclList, mask) : null),
     [d.table, d.terms, d.mode, d.exclList, mask],
   );
+  // 文の一覧の並び（年の新しい順 → 格付 → 業種）
+  const sortedHits = useMemo(() => (d.table && hits ? sortHits(d.table, hits) : null), [d.table, hits]);
   const stale = d.terms !== terms || d.filters !== filters || d.mode !== mode || d.exclList !== exclList;
 
   // サーバーで分析するときの条件（入力が落ち着いた値を使う）
@@ -377,7 +379,7 @@ export default function App() {
             <div className="hint-row muted">
               <kbd>↓</kbd> 結果へ <kbd>Enter</kbd> 全文 <kbd>Esc</kbd> 検索欄へ <kbd>1</kbd>–<kbd>4</kbd> 表示の切り替え
             </div>
-            <ResultList ref={listRef} table={table!} rows={hits!} terms={d.terms} excl={d.exclList}
+            <ResultList ref={listRef} table={table!} rows={sortedHits!} terms={d.terms} excl={d.exclList}
               context={settings.context} dim={stale} onExit={() => searchRef.current?.focus()} />
           </>
         )}

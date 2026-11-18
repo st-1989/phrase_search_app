@@ -53,11 +53,11 @@ CSS = r"""
 }
 
 .context {
-  color: var(--muted);
+  color: var(--text);
 }
 
 .match {
-  color: var(--text);
+  color: #d70015;
   font-weight: 700;
 }
 
@@ -74,8 +74,8 @@ details.result-card > summary::-webkit-details-marker {
   display: none;
 }
 
-details.result-card > summary:hover .context {
-  color: #808080;
+details.result-card > summary:hover {
+  background: rgba(128, 128, 128, 0.06);
 }
 
 .meta {
@@ -425,6 +425,27 @@ def find_hits(df: pd.DataFrame, text_column: str, terms: list[str], mode: str,
     return (has_a & has_b)[rid] & (a | b)
 
 
+def sort_hits(df: pd.DataFrame) -> pd.DataFrame:
+    """結果の並び: 年の新しい順 → 格付の高い順（AAA→D）→ 業種 → 公表日の新しい順 → 発行体名。
+    同じレポートの文は元の並び（文の順）を保つ（安定ソート）。"""
+    keys, asc = {}, []
+    if YEAR_COLUMN in df:
+        keys["_year"] = pd.to_numeric(df[YEAR_COLUMN], errors="coerce")
+        asc.append(False)
+    if RATING_COLUMN in df:
+        keys["_rating"] = df[RATING_COLUMN].map(lambda v: RATING_ORDER.index(v) if v in RATING_ORDER else 99)
+        asc.append(True)
+    for col, up in (("業種(業務)", True), ("公表日(CDEX)", False), ("発行体名(CDEX)", True)):
+        if col in df:
+            keys["_" + col] = df[col].astype("string")
+            asc.append(up)
+    if not keys:
+        return df
+    order = pd.DataFrame(keys, index=df.index).reset_index(drop=True)
+    pos = order.sort_values(list(keys), ascending=asc, kind="stable", na_position="last").index
+    return df.iloc[pos.to_numpy()]
+
+
 def exact_search(
     df: pd.DataFrame,
     hit: np.ndarray,
@@ -435,7 +456,7 @@ def exact_search(
     excl: tuple = (),
 ) -> list[dict]:
     """ヒットした上位 max_results 件だけ Python でスパン計算・HTML 化する（全ての検索語をハイライト）。"""
-    subset = df[hit].head(max_results)
+    subset = sort_hits(df[hit]).head(max_results)
     results = []
     for pos in range(len(subset)):
         row = subset.iloc[pos]
