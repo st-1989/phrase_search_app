@@ -13,9 +13,15 @@ export const RATING_COLUMN = "発行体格付(業務)";
 export const SOURCE_COLUMN = "ファイル";
 /** 複数ファイルをまとめたデータセットの id は、各ファイルの id をこれでつなぐ（server/main.py と同じ）。 */
 export const DATASET_SEP = "|";
+/** 前回のレポートと比べた変化（server/merge.py の add_change_columns が作る列）。 */
+export const PREV_RATING_COLUMN = "前回格付";
+export const RATING_CHANGE_COLUMN = "格付の変化";
+export const OUTLOOK_CHANGE_COLUMN = "方向性の変化";
 export const FILTER_COLUMNS = [
   SOURCE_COLUMN,
   RATING_COLUMN,
+  RATING_CHANGE_COLUMN,
+  OUTLOOK_CHANGE_COLUMN,
   "業種(業務)",
   "担当部署(業務)",
   "担当アナリスト(CDEX)",
@@ -25,6 +31,8 @@ export const FILTER_LABELS: Record<string, string> = {
   [YEAR_COLUMN]: "年",
   [SOURCE_COLUMN]: "ファイル",
   [RATING_COLUMN]: "格付",
+  [RATING_CHANGE_COLUMN]: "格付の変化",
+  [OUTLOOK_CHANGE_COLUMN]: "方向性の変化",
   "業種(業務)": "業種",
   "担当部署(業務)": "担当部署",
   "担当アナリスト(CDEX)": "担当",
@@ -34,6 +42,12 @@ export const DEFAULT_YEAR_FROM = 2016;
 export const DEFAULT_YEAR_TO = 2026;
 const RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
   "BB+", "BB", "BB-", "B+", "B", "B-", "CCC", "CC", "C", "D"];
+/** 値の並びを決めている列（それ以外は文字順）。 */
+const VALUE_ORDERS: Record<string, string[]> = {
+  [RATING_COLUMN]: RATING_ORDER,
+  [RATING_CHANGE_COLUMN]: ["引き上げ", "引き下げ", "据え置き", "前回なし"],
+  [OUTLOOK_CHANGE_COLUMN]: ["上向き", "下向き", "その他の変更", "変化なし", "前回なし"],
+};
 
 /** 列は「値の一覧 values」と「各行がどの値か codes（-1 は欠損）」で持つ。絞り込みは codes の比較だけで済む。 */
 export type Col = { values: Value[]; codes: Int32Array };
@@ -90,16 +104,17 @@ export class Table {
     return out;
   }
 
-  /** 絞り込みの選択肢（格付は AAA→D の順、それ以外は文字順）。 */
+  /** 絞り込みの選択肢（格付は AAA→D、変化は 引き上げ→… の順、それ以外は文字順）。 */
   options(col: string): Value[] {
     const c = this.cols[col];
     if (!c) return [];
     const used = new Set<number>();
     for (const k of c.codes) if (k >= 0) used.add(k);
     const vals = [...used].map((k) => c.values[k]);
-    if (col === RATING_COLUMN) {
+    const order = VALUE_ORDERS[col];
+    if (order) {
       const rank = (v: Value) => {
-        const i = RATING_ORDER.indexOf(String(v));
+        const i = order.indexOf(String(v));
         return i < 0 ? 99 : i;
       };
       return vals.sort((a, b) => rank(a) - rank(b) || String(a).localeCompare(String(b)));
@@ -302,20 +317,24 @@ export function sortHits(t: Table, rows: Int32Array | number[]): number[] {
 
 // ---- 集計の軸 ----
 
-export const GROUP_COLUMNS = [RATING_COLUMN, "格付の方向性(業務)", "格付アクション(業務)", "業種(業務)", YEAR_COLUMN];
+export const GROUP_COLUMNS = [RATING_COLUMN, "格付の方向性(業務)", "格付アクション(業務)", RATING_CHANGE_COLUMN,
+  OUTLOOK_CHANGE_COLUMN, "業種(業務)", YEAR_COLUMN];
 export const GROUP_LABELS: Record<string, string> = {
   [RATING_COLUMN]: "格付",
+  [RATING_CHANGE_COLUMN]: "格付の変化",
+  [OUTLOOK_CHANGE_COLUMN]: "方向性の変化",
   "格付の方向性(業務)": "方向性",
   "格付アクション(業務)": "アクション",
   "業種(業務)": "業種",
   [YEAR_COLUMN]: "年",
 };
 
-/** 軸の値の並び（格付は AAA→D、数値は小さい順、文字は pandas と同じ文字コード順）。 */
+/** 軸の値の並び（格付は AAA→D、変化は 引き上げ→…、数値は小さい順、文字は pandas と同じ文字コード順）。 */
 export function compareValues(col: string, a: Value, b: Value): number {
-  if (col === RATING_COLUMN) {
-    const ra = RATING_ORDER.indexOf(String(a));
-    const rb = RATING_ORDER.indexOf(String(b));
+  const order = VALUE_ORDERS[col];
+  if (order) {
+    const ra = order.indexOf(String(a));
+    const rb = order.indexOf(String(b));
     const d = (ra < 0 ? 99 : ra) - (rb < 0 ? 99 : rb);
     if (d) return d;
   }

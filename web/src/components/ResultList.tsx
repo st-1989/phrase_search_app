@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { SOURCE_COLUMN, YEAR_COLUMN, pieces, spansOf, type Table } from "../data";
+import { PREV_RATING_COLUMN, RATING_CHANGE_COLUMN, SOURCE_COLUMN, YEAR_COLUMN, pieces, spansOf, type Table } from "../data";
 
 export type ResultListHandle = { focusFirst: () => void };
 
@@ -106,13 +106,17 @@ function Meta({ table, row }: { table: Table; row: number }) {
     const x = table.value(c, row);
     return x === null || x === "" ? "" : String(x);
   };
-  const rating = [g("発行体格付(業務)"), g("格付の方向性(業務)")].filter(Boolean).join(" ");
+  const change = g(RATING_CHANGE_COLUMN);
+  const moved = change === "引き上げ" || change === "引き下げ";
+  // 格付が動いたレポートは「前回 → 今回」で示す
+  const now = moved ? `${g(PREV_RATING_COLUMN)} → ${g("発行体格付(業務)")}` : g("発行体格付(業務)");
+  const rating = [now, g("格付の方向性(業務)")].filter(Boolean).join(" ");
   const rest = [g(YEAR_COLUMN), g("公表日(CDEX)"), g("業種(業務)"), g("格付アクション(業務)"), g("担当アナリスト(CDEX)"), g(SOURCE_COLUMN)]
     .filter(Boolean);
   return (
     <div className="meta">
       <span className="issuer">{g("発行体名(CDEX)")}</span>
-      {rating && <span className="rating">{rating}</span>}
+      {rating && <span className={"rating" + (moved ? (change === "引き上げ" ? " up" : " down") : "")}>{rating}</span>}
       <span className="meta-rest">{rest.join(" · ")}</span>
     </div>
   );

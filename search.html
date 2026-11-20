@@ -187,6 +187,8 @@ kbd {
 .meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.15rem 0.6rem; font-size: 0.78em; color: var(--muted); margin-bottom: 0.2rem; }
 .issuer { color: var(--text); font-weight: 700; font-size: 1.08em; }
 .rating { font-variant-numeric: tabular-nums; color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 0 0.4rem; font-size: 0.95em; }
+.rating.up { border-color: #2e7d32; color: #2e7d32; }
+.rating.down { border-color: #c62828; color: #c62828; }
 .snippet { margin: 0; line-height: 1.75; word-break: break-word; }
 .snippet .ctx { color: var(--text); }
 .snippet.full { margin-top: 0.4rem; padding: 0.6rem 0.85rem; background: var(--surface); border-radius: 8px; border: 1px solid var(--border); }
@@ -316,9 +318,18 @@ const EXPECTED_COLUMNS = [
   "発行体名(CDEX)", "発行体名(業務)", "業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)",
   "公表日(業務)", RATING_COLUMN, "格付の方向性(業務)", "格付アクション(業務)", "タグ", TEXT_COLUMN,
 ];
-const FILTER_COLUMNS = [SOURCE_COLUMN, RATING_COLUMN, "業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)", "格付アクション(業務)"];
+// 前回のレポートと比べた変化（読み込み時に作る列。server/merge.py の add_change_columns と同じ）
+const PREV_RATING_COLUMN = "前回格付";
+const RATING_CHANGE_COLUMN = "格付の変化";
+const OUTLOOK_CHANGE_COLUMN = "方向性の変化";
+const RATING_CHANGE_ORDER = ["引き上げ", "引き下げ", "据え置き", "前回なし"];
+const OUTLOOK_CHANGE_ORDER = ["上向き", "下向き", "その他の変更", "変化なし", "前回なし"];
+const OUTLOOK_ORDER = ["ポジティブ", "安定的", "ネガティブ"];  // 良い順
+const FILTER_COLUMNS = [SOURCE_COLUMN, RATING_COLUMN, RATING_CHANGE_COLUMN, OUTLOOK_CHANGE_COLUMN,
+  "業種(業務)", "担当部署(業務)", "担当アナリスト(CDEX)", "格付アクション(業務)"];
 const FILTER_LABELS = {
-  [SOURCE_COLUMN]: "ファイル", [RATING_COLUMN]: "格付", "業種(業務)": "業種", "担当部署(業務)": "担当部署",
+  [SOURCE_COLUMN]: "ファイル", [RATING_COLUMN]: "格付", [RATING_CHANGE_COLUMN]: "格付の変化",
+  [OUTLOOK_CHANGE_COLUMN]: "方向性の変化", "業種(業務)": "業種", "担当部署(業務)": "担当部署",
   "担当アナリスト(CDEX)": "担当", "格付アクション(業務)": "アクション",
 };
 const RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
@@ -730,7 +741,78 @@ function ratingRank(v) {
   return i < 0 ? 99 : i;
 }
 
+/** 全角→半角・【】と空白を除く（「【AA－】」「AA-」を同じ値にする）。 */
+function cleanLabel(v) {
+  return String(v ?? "").normalize("NFKC").replace(/[【】\s]/g, "").replace(/[−－]/g, "-");
+}
+
+/** 公表日を YYYYMMDD の数にする（「2025/3/5」「2025-03-05 00:00:00」などに対応）。読めなければ NaN。 */
+function dateNumber(v) {
+  const m = /(\d{4})\D(\d{1,2})\D(\d{1,2})/.exec(String(v ?? ""));
+  return m ? +m[1] * 10000 + +m[2] * 100 + +m[3] : NaN;
+}
+
+/**
+ * 発行体ごとに公表日順に並べ、1つ前のレポートと比べた「前回格付」「格付の変化」「方向性の変化」の列を作る。
+ * レポート = 発行体（ID、無ければコード・名前）＋公表日。比べるのは読み込んだデータの中だけ。
+ */
+function addChangeColumns(cols) {
+  const issuerCol = ["発行体ID(業務)", "発行体コード(業務)", "発行体名(CDEX)"].find((c) => cols[c]);
+  const dateCol = ["公表日(業務)", "公表日(CDEX)"].find((c) => cols[c]);
+  if (!issuerCol || !dateCol || !cols[RATING_COLUMN]) return cols;
+  const n = cols[TEXT_COLUMN].length;
+  const iss = cols[issuerCol], dates = cols[dateCol], rat = cols[RATING_COLUMN], out = cols["格付の方向性(業務)"];
+  // レポートごとに最初に出てくる格付・方向性
+  const reports = new Map();
+  const keyOf = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const id = String(iss[i] ?? ""), d = dateNumber(dates[i]);
+    if (!id || Number.isNaN(d)) continue;
+    const key = id + "\u0001" + d;
+    keyOf[i] = key;
+    let r = reports.get(key);
+    if (!r) reports.set(key, (r = { id, d, rating: "", outlook: "" }));
+    if (!r.rating) r.rating = cleanLabel(rat[i]);
+    if (!r.outlook && out) r.outlook = cleanLabel(out[i]);
+  }
+  const byIssuer = new Map();
+  for (const r of reports.values()) {
+    if (!byIssuer.has(r.id)) byIssuer.set(r.id, []);
+    byIssuer.get(r.id).push(r);
+  }
+  const rk = (v) => RATING_ORDER.indexOf(v), ok = (v) => OUTLOOK_ORDER.indexOf(v);
+  for (const list of byIssuer.values()) {
+    list.sort((a, b) => a.d - b.d);
+    list.forEach((r, k) => {
+      const p = k > 0 ? list[k - 1] : null;
+      r.prev = p ? p.rating : "";
+      r.rc = "前回なし";
+      if (p && rk(r.rating) >= 0 && rk(p.rating) >= 0) {
+        const d = rk(r.rating) - rk(p.rating);
+        r.rc = d < 0 ? "引き上げ" : d > 0 ? "引き下げ" : "据え置き";
+      }
+      r.oc = "前回なし";
+      if (p && r.outlook && p.outlook) {
+        if (r.outlook === p.outlook) r.oc = "変化なし";
+        else if (ok(r.outlook) >= 0 && ok(p.outlook) >= 0) r.oc = ok(r.outlook) < ok(p.outlook) ? "上向き" : "下向き";
+        else r.oc = "その他の変更";
+      }
+    });
+  }
+  const prev = new Array(n), rc = new Array(n), oc = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = keyOf[i] && reports.get(keyOf[i]);
+    prev[i] = r ? r.prev : "";
+    rc[i] = r ? r.rc : "前回なし";
+    oc[i] = r ? r.oc : "前回なし";
+  }
+  const added = { [PREV_RATING_COLUMN]: prev, [RATING_CHANGE_COLUMN]: rc };
+  if (out) added[OUTLOOK_CHANGE_COLUMN] = oc;
+  return { ...cols, ...added };
+}
+
 function buildTable(cols) {
+  cols = addChangeColumns(cols);
   const text = cols[TEXT_COLUMN];
   const n = text.length;
   const t = { n, cols, text, years: null, reportIds: null, nReports: 0, fvalues: {}, fcodes: {} };
@@ -766,7 +848,9 @@ function buildTable(cols) {
     const set = new Set(cols[c]);
     set.delete("");
     const values = [...set];
-    if (c === RATING_COLUMN) values.sort((a, b) => ratingRank(a) - ratingRank(b) || (a < b ? -1 : a > b ? 1 : 0));
+    const order = c === RATING_CHANGE_COLUMN ? RATING_CHANGE_ORDER : c === OUTLOOK_CHANGE_COLUMN ? OUTLOOK_CHANGE_ORDER : null;
+    if (order) values.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    else if (c === RATING_COLUMN) values.sort((a, b) => ratingRank(a) - ratingRank(b) || (a < b ? -1 : a > b ? 1 : 0));
     else values.sort((a, b) => a.localeCompare(b, "ja"));
     const index = new Map(values.map((v, k) => [v, k]));
     const codes = new Int32Array(n);
@@ -1088,9 +1172,14 @@ function snippetHtml(text, spans, context, full) {
 function metaHtml(row) {
   const c = S.table.cols;
   const g = (col) => (c[col] ? c[col][row] || "" : "");
-  const rating = [g(RATING_COLUMN), g("格付の方向性(業務)")].filter(Boolean).join(" ");
+  const change = g(RATING_CHANGE_COLUMN);
+  const moved = change === "引き上げ" || change === "引き下げ";
+  // 格付が動いたレポートは「前回 → 今回」で示す
+  const now = moved ? `${g(PREV_RATING_COLUMN)} → ${g(RATING_COLUMN)}` : g(RATING_COLUMN);
+  const rating = [now, g("格付の方向性(業務)")].filter(Boolean).join(" ");
+  const cls = "rating" + (moved ? (change === "引き上げ" ? " up" : " down") : "");
   const rest = [g(YEAR_COLUMN), g("公表日(CDEX)"), g("業種(業務)"), g("格付アクション(業務)"), g("担当アナリスト(CDEX)"), g(SOURCE_COLUMN)].filter(Boolean);
-  return `<div class="meta"><span class="issuer">${esc(g("発行体名(CDEX)"))}</span>${rating ? `<span class="rating">${esc(rating)}</span>` : ""}<span class="meta-rest">${esc(rest.join(" · "))}</span></div>`;
+  return `<div class="meta"><span class="issuer">${esc(g("発行体名(CDEX)"))}</span>${rating ? `<span class="${cls}">${esc(rating)}</span>` : ""}<span class="meta-rest">${esc(rest.join(" · "))}</span></div>`;
 }
 
 /* =====================================================================

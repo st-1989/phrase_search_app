@@ -14,7 +14,10 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from server.merge import SOURCE_COLUMN, merge_tables
+from server.merge import (
+    OUTLOOK_CHANGE_COLUMN, OUTLOOK_CHANGE_ORDER, PREV_RATING_COLUMN, RATING_CHANGE_COLUMN, RATING_CHANGE_ORDER,
+    SOURCE_COLUMN, add_change_columns, merge_tables,
+)
 
 
 st.set_page_config(page_title="Japanese Phrase Search", layout="wide")
@@ -194,7 +197,8 @@ def load_uploaded(file_bytes: bytes, filename: str) -> pd.DataFrame:
 @st.cache_resource(show_spinner="ファイルをまとめています…", max_entries=3)
 def merge_cached(key: tuple, _tables: list[tuple[str, pd.DataFrame]]) -> tuple[pd.DataFrame, list[dict]]:
     """複数ファイルを1つの表にまとめる（前のファイルと重複する行は除く）。key はファイルの組（名前と更新時刻など）。"""
-    return merge_tables(_tables)
+    df, info = merge_tables(_tables)
+    return add_change_columns(df), info  # 前回のレポートと比べた格付・方向性の変化
 
 
 def normalize_text(text: str, use_nfkc: bool, ignore_spaces: bool) -> str:
@@ -382,7 +386,12 @@ def meta_html(row: pd.Series) -> str:
         val = row.get(col)
         return "" if pd.isna(val) else html.escape(str(val))
 
-    rating = " ".join(x for x in [v("発行体格付(業務)"), v("格付の方向性(業務)")] if x)
+    change = v(RATING_CHANGE_COLUMN)
+    now = v("発行体格付(業務)")
+    if change in ("引き上げ", "引き下げ"):  # 格付が動いたレポートは「前回 → 今回」で示す
+        color = "#2e7d32" if change == "引き上げ" else "#c62828"
+        now = f'<span style="color:{color};font-weight:600">{v(PREV_RATING_COLUMN)} → {now}（{change}）</span>'
+    rating = " ".join(x for x in [now, v("格付の方向性(業務)")] if x)
     items = [
         ("", f"<b>{v('発行体名(CDEX)')}</b>"),
         ("年", v(YEAR_COLUMN)),
@@ -481,7 +490,14 @@ def exact_search(
 RATING_COLUMN = "発行体格付(業務)"
 RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
                 "BB+", "BB", "BB-", "B+", "B", "B-", "CCC", "CC", "C", "D"]
-GROUP_COLUMNS = [RATING_COLUMN, "格付の方向性(業務)", "格付アクション(業務)", "業種(業務)", YEAR_COLUMN]
+# 値の並びを決めている列（それ以外は文字順）
+VALUE_ORDERS = {
+    RATING_COLUMN: RATING_ORDER,
+    RATING_CHANGE_COLUMN: RATING_CHANGE_ORDER,
+    OUTLOOK_CHANGE_COLUMN: OUTLOOK_CHANGE_ORDER,
+}
+GROUP_COLUMNS = [RATING_COLUMN, "格付の方向性(業務)", "格付アクション(業務)", RATING_CHANGE_COLUMN, OUTLOOK_CHANGE_COLUMN,
+                 "業種(業務)", YEAR_COLUMN]
 TOKENIZER_FAST = "高速（文字種で分割）"
 TOKENIZER_JANOME = "形態素解析（Janome・名詞）"
 RANK_BY_SCORE = "特徴度（一致文書で特に多い語）"
@@ -595,8 +611,9 @@ def enriched_terms(fg, bg, queries, exclude, min_count, top_n, rank_by) -> pd.Da
 
 def group_order(values, column: str) -> list:
     values = [v for v in values if pd.notna(v)]
-    if column == RATING_COLUMN:
-        return sorted(values, key=lambda v: (RATING_ORDER.index(v) if v in RATING_ORDER else 99, str(v)))
+    order = VALUE_ORDERS.get(column)
+    if order:
+        return sorted(values, key=lambda v: (order.index(v) if v in order else 99, str(v)))
     return sorted(values)
 
 
@@ -610,10 +627,10 @@ TERM_COLUMN_CONFIG = {
 
 def combo_key(values: tuple, columns: list[str]) -> tuple:
     """複数軸の組み合わせを、各軸の自然な順（格付は AAA→…）で並べるためのキー。"""
-    return tuple(
-        (RATING_ORDER.index(v) if v in RATING_ORDER else 99, str(v)) if c == RATING_COLUMN else v
-        for v, c in zip(values, columns)
-    )
+    def key(v, c):
+        order = VALUE_ORDERS.get(c)
+        return (order.index(v) if v in order else 99, str(v)) if order else v
+    return tuple(key(v, c) for v, c in zip(values, columns))
 
 
 def combo_label(values: tuple) -> str:
@@ -1176,7 +1193,7 @@ with st.sidebar:
         else:
             st.caption(f"{YEAR_COLUMN}: {year_min} のみ")
 
-    for col in [SOURCE_COLUMN, RATING_COLUMN] + MULTI_FILTER_COLUMNS:
+    for col in [SOURCE_COLUMN, RATING_COLUMN, RATING_CHANGE_COLUMN, OUTLOOK_CHANGE_COLUMN] + MULTI_FILTER_COLUMNS:
         if col not in df.columns:
             continue
         options = group_order(df[col].dropna().unique(), col)  # 格付符号は AAA→D の順

@@ -12,12 +12,20 @@ from collections import Counter, OrderedDict
 import numpy as np
 import pandas as pd
 
+from .merge import OUTLOOK_CHANGE_COLUMN, OUTLOOK_CHANGE_ORDER, RATING_CHANGE_COLUMN, RATING_CHANGE_ORDER
+
 TEXT_COLUMN = "本文"
 YEAR_COLUMN = "年(CDEX)"
 RATING_COLUMN = "発行体格付(業務)"
 RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
                 "BB+", "BB", "BB-", "B+", "B", "B-", "CCC", "CC", "C", "D"]
 
+# 値の並びを決めている列（それ以外は文字順）
+VALUE_ORDERS = {
+    RATING_COLUMN: RATING_ORDER,
+    RATING_CHANGE_COLUMN: RATING_CHANGE_ORDER,
+    OUTLOOK_CHANGE_COLUMN: OUTLOOK_CHANGE_ORDER,
+}
 _RATING_SYMBOL = re.compile(r"(?:AAA|AA|A|BBB|BB|B|CCC|CC|C|D)[+-]?")
 _RUN_PATTERN = re.compile(r"[一-龥々〆]{2,}|[ァ-ヴー]{2,}|[A-Za-z][A-Za-z&/\-]+")
 _WORD_CHARS = re.compile(r"[一-龥々ァ-ヴーぁ-んA-Za-z0-9]+")
@@ -206,10 +214,12 @@ def enriched_terms(fg, bg, queries, exclude, min_count, top_n, rank_by) -> pd.Da
 
 
 def combo_key(values: tuple, columns: list[str]) -> tuple:
-    return tuple(
-        (RATING_ORDER.index(v) if v in RATING_ORDER else 99, str(v)) if c == RATING_COLUMN else (0, v)
-        for v, c in zip(values, columns)
-    )
+    def key(v, c):
+        order = VALUE_ORDERS.get(c)
+        if order is None:
+            return (0, v)
+        return (order.index(v) if v in order else 99, str(v))
+    return tuple(key(v, c) for v, c in zip(values, columns))
 
 
 def _py(v):

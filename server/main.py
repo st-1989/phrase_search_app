@@ -17,7 +17,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .merge import merge_tables
+from .merge import add_change_columns, merge_tables
 
 ROOT = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = ROOT / ".cache" / "uploads"  # 画面からアップロードしたファイル
@@ -117,7 +117,8 @@ def cached_merged(key: DatasetKey) -> tuple[pd.DataFrame, list[dict]]:
         if TEXT_COLUMN not in df.columns:
             raise HTTPException(400, f"{Path(path_str).name}: 「{TEXT_COLUMN}」列が見つかりません。")
         tables.append((Path(path_str).name, df))
-    return merge_tables(tables)
+    df, info = merge_tables(tables)
+    return add_change_columns(df), info
 
 
 def cached_table(key: DatasetKey) -> pd.DataFrame:

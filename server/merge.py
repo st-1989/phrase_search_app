@@ -57,3 +57,86 @@ def merge_tables(tables: list[tuple[str, pd.DataFrame]]) -> tuple[pd.DataFrame, 
     if YEAR_COLUMN in df.columns:
         df[YEAR_COLUMN] = pd.to_numeric(df[YEAR_COLUMN], errors="coerce").astype("Int64")
     return df, info
+
+
+# ---- 前回のレポートとの比較（格付・方向性の変化） ----
+RATING_COLUMN = "発行体格付(業務)"
+OUTLOOK_COLUMN = "格付の方向性(業務)"
+PREV_RATING_COLUMN = "前回格付"
+RATING_CHANGE_COLUMN = "格付の変化"
+OUTLOOK_CHANGE_COLUMN = "方向性の変化"
+RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
+                "BB+", "BB", "BB-", "B+", "B", "B-", "CCC", "CC", "C", "D"]
+OUTLOOK_ORDER = ["ポジティブ", "安定的", "ネガティブ"]  # 良い順
+RATING_CHANGE_ORDER = ["引き上げ", "引き下げ", "据え置き", "前回なし"]
+OUTLOOK_CHANGE_ORDER = ["上向き", "下向き", "その他の変更", "変化なし", "前回なし"]
+ISSUER_KEY_COLUMNS = ["発行体ID(業務)", "発行体コード(業務)", "発行体名(CDEX)"]
+DATE_COLUMNS = ["公表日(業務)", "公表日(CDEX)"]
+
+
+def _clean_label(s: pd.Series) -> pd.Series:
+    """全角→半角・【】と空白を除く（「【AA－】」「AA-」を同じ値にする）。"""
+    s = s.astype("string").str.normalize("NFKC").str.replace(r"[【】\s]", "", regex=True)
+    s = s.str.replace("−", "-").str.replace("－", "-")
+    return s.mask(s == "")
+
+
+def _date_number(s: pd.Series) -> pd.Series:
+    """公表日を YYYYMMDD の数にする（「2025/3/5」「2025-03-05 00:00:00」などに対応）。"""
+    p = s.astype("string").str.extract(r"(\d{4})\D(\d{1,2})\D(\d{1,2})").astype("float")
+    return p[0] * 10000 + p[1] * 100 + p[2]
+
+
+def add_change_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """発行体ごとに公表日順に並べ、1つ前のレポートと比べた「前回格付」「格付の変化」「方向性の変化」を加える。
+
+    - レポート = 発行体（ID、無ければコード・名前）＋公表日。同じレポートの文はすべて同じ値になる。
+    - 格付の変化: 格付の順位（AAA→D）で比べて 引き上げ / 引き下げ / 据え置き。前のレポートが無い・格付が読めないときは 前回なし。
+    - 方向性の変化: ポジティブ＞安定的＞ネガティブ で比べて 上向き / 下向き / 変化なし。
+      どちらかがこの3つ以外（レーティング・モニターなど）で値が違えば その他の変更。
+    - 比べるのは読み込んだデータの中だけ（前年分が無ければ 前回なし）。
+    """
+    issuer = next((c for c in ISSUER_KEY_COLUMNS if c in df.columns), None)
+    date = next((c for c in DATE_COLUMNS if c in df.columns), None)
+    if issuer is None or date is None or RATING_COLUMN not in df.columns:
+        return df
+    w = pd.DataFrame({
+        "issuer": df[issuer].astype("string"),
+        "date": _date_number(df[date]),
+        "rating": _clean_label(df[RATING_COLUMN]),
+        "outlook": _clean_label(df[OUTLOOK_COLUMN]) if OUTLOOK_COLUMN in df.columns else pd.NA,
+    })
+    ok = w["issuer"].notna() & w["date"].notna()
+    # レポートごとに1行（最初に出てくる格付・方向性）
+    rep = (w[ok].groupby(["issuer", "date"], sort=True)
+           .agg(rating=("rating", "first"), outlook=("outlook", "first")).reset_index())
+    rep["prev_rating"] = rep.groupby("issuer")["rating"].shift(1)
+    rep["prev_outlook"] = rep.groupby("issuer")["outlook"].shift(1)
+    has_prev = rep.groupby("issuer").cumcount() > 0
+
+    rank = {r: i for i, r in enumerate(RATING_ORDER)}
+    r_now, r_prev = rep["rating"].map(rank), rep["prev_rating"].map(rank)
+    rep["rating_change"] = "前回なし"
+    known = has_prev & r_now.notna() & r_prev.notna()
+    rep.loc[known & (r_now < r_prev), "rating_change"] = "引き上げ"
+    rep.loc[known & (r_now > r_prev), "rating_change"] = "引き下げ"
+    rep.loc[known & (r_now == r_prev), "rating_change"] = "据え置き"
+
+    orank = {o: i for i, o in enumerate(OUTLOOK_ORDER)}
+    o_now, o_prev = rep["outlook"].map(orank), rep["prev_outlook"].map(orank)
+    rep["outlook_change"] = "前回なし"
+    both = has_prev & rep["outlook"].notna() & rep["prev_outlook"].notna()
+    rep.loc[both & (rep["outlook"] == rep["prev_outlook"]), "outlook_change"] = "変化なし"
+    ranked = both & o_now.notna() & o_prev.notna()
+    rep.loc[ranked & (o_now < o_prev), "outlook_change"] = "上向き"
+    rep.loc[ranked & (o_now > o_prev), "outlook_change"] = "下向き"
+    rep.loc[both & ~ranked & (rep["outlook"] != rep["prev_outlook"]), "outlook_change"] = "その他の変更"
+
+    m = w[["issuer", "date"]].merge(
+        rep[["issuer", "date", "prev_rating", "rating_change", "outlook_change"]], on=["issuer", "date"], how="left")
+    out = df.copy()
+    out[PREV_RATING_COLUMN] = m["prev_rating"].astype(object).where(m["prev_rating"].notna(), None).to_numpy()
+    out[RATING_CHANGE_COLUMN] = pd.Categorical(m["rating_change"].fillna("前回なし"), categories=RATING_CHANGE_ORDER)
+    if OUTLOOK_COLUMN in df.columns:
+        out[OUTLOOK_CHANGE_COLUMN] = pd.Categorical(m["outlook_change"].fillna("前回なし"), categories=OUTLOOK_CHANGE_ORDER)
+    return out
