@@ -743,36 +743,74 @@ function ratingRank(v) {
 
 /** 全角→半角・【】と空白を除く（「【AA－】」「AA-」を同じ値にする）。 */
 function cleanLabel(v) {
-  return String(v ?? "").normalize("NFKC").replace(/[【】\s]/g, "").replace(/[−－]/g, "-");
+  return String(v ?? "").normalize("NFKC").replace(/[【】\s]/g, "").replace(/[−－‐–]/g, "-");
 }
 
-/** 公表日を YYYYMMDD の数にする（「2025/3/5」「2025-03-05 00:00:00」などに対応）。読めなければ NaN。 */
-function dateNumber(v) {
-  const m = /(\d{4})\D(\d{1,2})\D(\d{1,2})/.exec(String(v ?? ""));
-  return m ? +m[1] * 10000 + +m[2] * 100 + +m[3] : NaN;
+/** 格付記号を取り出す（「AA-」「【AA－】」「AA-(安定的)」→ AA-）。読めなければ ""。 */
+function ratingSymbol(v) {
+  const m = /^(?:AAA|AA|A|BBB|BB|B|CCC|CC|C|D)[+-]?(?![A-Z])/.exec(cleanLabel(v).toUpperCase());
+  return m ? m[0] : "";
 }
 
 /**
+ * 公表日を YYYYMMDD の数にする。読めなければ NaN。
+ * 「2025/3/5」「2025-03-05 00:00:00」「2025年3月5日」「20250305」、Excel の日付シリアル値（45721 など）に対応。
+ */
+function dateNumber(v) {
+  const t = String(v ?? "").normalize("NFKC").trim();
+  let m = /(\d{4})\D+(\d{1,2})\D+(\d{1,2})/.exec(t);
+  if (m) return +m[1] * 10000 + +m[2] * 100 + +m[3];
+  m = /^(\d{4})(\d{2})(\d{2})$/.exec(t);
+  if (m) return +m[1] * 10000 + +m[2] * 100 + +m[3];
+  if (/^\d{5}(\.\d+)?$/.test(t)) {
+    const d = new Date(Math.round((Number(t) - 25569) * 86400000));
+    return d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+  }
+  return NaN;
+}
+
+const ISSUER_COLUMNS = ["発行体ID(業務)", "発行体コード(業務)", "発行体名(CDEX)", "発行体名(業務)"];
+const DATE_COLUMNS = ["公表日(業務)", "公表日(CDEX)"];
+
+/**
  * 発行体ごとに公表日順に並べ、1つ前のレポートと比べた「前回格付」「格付の変化」「方向性の変化」の列を作る。
- * レポート = 発行体（ID、無ければコード・名前）＋公表日。比べるのは読み込んだデータの中だけ。
+ * レポート = 発行体（ID、空なら コード → 名前）＋公表日（公表日(業務)、空なら 公表日(CDEX)）。
+ * 比べるのは読み込んだデータの中だけ。判定できなかった理由は S.changeDiag に残す。
  */
 function addChangeColumns(cols) {
-  const issuerCol = ["発行体ID(業務)", "発行体コード(業務)", "発行体名(CDEX)"].find((c) => cols[c]);
-  const dateCol = ["公表日(業務)", "公表日(CDEX)"].find((c) => cols[c]);
-  if (!issuerCol || !dateCol || !cols[RATING_COLUMN]) return cols;
   const n = cols[TEXT_COLUMN].length;
-  const iss = cols[issuerCol], dates = cols[dateCol], rat = cols[RATING_COLUMN], out = cols["格付の方向性(業務)"];
-  // レポートごとに最初に出てくる格付・方向性
+  const issCols = ISSUER_COLUMNS.filter((c) => cols[c]);
+  const dateCols = DATE_COLUMNS.filter((c) => cols[c]);
+  const diag = { n, noIssuer: 0, noDate: 0, noRating: 0, reports: 0, withPrev: 0, dateSamples: [], ratingSamples: [] };
+  S.changeDiag = diag;
+  if (!issCols.length || !dateCols.length || !cols[RATING_COLUMN]) { diag.missing = true; return cols; }
+  const rat = cols[RATING_COLUMN], out = cols["格付の方向性(業務)"];
+  const pick = (names, i, read) => {
+    for (const c of names) { const v = read(cols[c][i]); if (v !== "" && !Number.isNaN(v)) return v; }
+    return names === dateCols ? NaN : "";
+  };
+  // レポートごとに最初に読める格付・方向性
   const reports = new Map();
   const keyOf = new Array(n);
   for (let i = 0; i < n; i++) {
-    const id = String(iss[i] ?? ""), d = dateNumber(dates[i]);
-    if (!id || Number.isNaN(d)) continue;
+    const id = pick(issCols, i, (v) => String(v ?? "").trim());
+    const d = pick(dateCols, i, dateNumber);
+    if (!id) { diag.noIssuer++; continue; }
+    if (Number.isNaN(d)) {
+      diag.noDate++;
+      const raw = dateCols.map((c) => cols[c][i]).find((v) => String(v ?? "").trim() !== "");
+      if (raw !== undefined && diag.dateSamples.length < 3 && !diag.dateSamples.includes(String(raw))) diag.dateSamples.push(String(raw));
+      continue;
+    }
     const key = id + "\u0001" + d;
     keyOf[i] = key;
     let r = reports.get(key);
     if (!r) reports.set(key, (r = { id, d, rating: "", outlook: "" }));
-    if (!r.rating) r.rating = cleanLabel(rat[i]);
+    const sym = ratingSymbol(rat[i]);
+    if (!sym && String(rat[i] ?? "").trim() && diag.ratingSamples.length < 3 && !diag.ratingSamples.includes(String(rat[i]))) {
+      diag.ratingSamples.push(String(rat[i]));
+    }
+    if (!r.rating) r.rating = sym;
     if (!r.outlook && out) r.outlook = cleanLabel(out[i]);
   }
   const byIssuer = new Map();
@@ -780,11 +818,15 @@ function addChangeColumns(cols) {
     if (!byIssuer.has(r.id)) byIssuer.set(r.id, []);
     byIssuer.get(r.id).push(r);
   }
+  diag.reports = reports.size;
+  diag.issuers = byIssuer.size;
   const rk = (v) => RATING_ORDER.indexOf(v), ok = (v) => OUTLOOK_ORDER.indexOf(v);
   for (const list of byIssuer.values()) {
     list.sort((a, b) => a.d - b.d);
     list.forEach((r, k) => {
       const p = k > 0 ? list[k - 1] : null;
+      if (p) diag.withPrev++;
+      if (!r.rating) diag.noRating++;
       r.prev = p ? p.rating : "";
       r.rc = "前回なし";
       if (p && rk(r.rating) >= 0 && rk(p.rating) >= 0) {
@@ -809,6 +851,20 @@ function addChangeColumns(cols) {
   const added = { [PREV_RATING_COLUMN]: prev, [RATING_CHANGE_COLUMN]: rc };
   if (out) added[OUTLOOK_CHANGE_COLUMN] = oc;
   return { ...cols, ...added };
+}
+
+/** 格付の変化がほとんど判定できなかったとき、理由を画面に出す。 */
+function changeNotice() {
+  const g = S.changeDiag;
+  if (!g || g.missing) return;
+  const judged = S.table.cols[RATING_CHANGE_COLUMN].filter((v) => v !== "前回なし").length;
+  if (judged > 0) return;
+  const parts = [`格付の変化を判定できませんでした（すべて「前回なし」）。レポート ${fmt(g.reports)} 件・発行体 ${fmt(g.issuers || 0)} 社、前回のレポートがあるのは ${fmt(g.withPrev)} 件です。`];
+  if (g.noIssuer) parts.push(`発行体（ID・コード・名前）が空の行: ${fmt(g.noIssuer)} 行。`);
+  if (g.noDate) parts.push(`公表日が読めない行: ${fmt(g.noDate)} 行${g.dateSamples.length ? `（例: ${g.dateSamples.map((x) => "「" + esc(x) + "」").join(" ")}）` : ""}。`);
+  if (g.ratingSamples.length) parts.push(`格付記号として読めない値の例: ${g.ratingSamples.map((x) => "「" + esc(x) + "」").join(" ")}。`);
+  if (!g.noDate && !g.noIssuer && g.withPrev === 0) parts.push("同じ発行体のレポートが1件ずつしかありません（発行体の列が行ごとに違う値になっていないか確認してください）。");
+  notice("", parts.join(" "));
 }
 
 function buildTable(cols) {
@@ -1454,6 +1510,7 @@ function setFiles(files, extra) {
     const missing = EXPECTED_COLUMNS.filter((c) => !f.cols[c]);
     if (missing.length) notice("", (files.length > 1 ? esc(f.name) + ": " : "") + "次の列がファイルにありません（該当する表示・絞り込みは省略されます）: " + esc(missing.join(", ")));
   }
+  changeNotice();
   $("dropzone").classList.add("hidden");
   $("searchBox").classList.remove("hidden");
   $("addBtn").classList.remove("hidden");

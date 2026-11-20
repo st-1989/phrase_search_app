@@ -70,40 +70,68 @@ RATING_ORDER = ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-
 OUTLOOK_ORDER = ["ポジティブ", "安定的", "ネガティブ"]  # 良い順
 RATING_CHANGE_ORDER = ["引き上げ", "引き下げ", "据え置き", "前回なし"]
 OUTLOOK_CHANGE_ORDER = ["上向き", "下向き", "その他の変更", "変化なし", "前回なし"]
-ISSUER_KEY_COLUMNS = ["発行体ID(業務)", "発行体コード(業務)", "発行体名(CDEX)"]
+ISSUER_KEY_COLUMNS = ["発行体ID(業務)", "発行体コード(業務)", "発行体名(CDEX)", "発行体名(業務)"]
+_RATING_SYMBOL = r"^((?:AAA|AA|A|BBB|BB|B|CCC|CC|C|D)[+-]?)(?![A-Z])"
 DATE_COLUMNS = ["公表日(業務)", "公表日(CDEX)"]
 
 
 def _clean_label(s: pd.Series) -> pd.Series:
     """全角→半角・【】と空白を除く（「【AA－】」「AA-」を同じ値にする）。"""
     s = s.astype("string").str.normalize("NFKC").str.replace(r"[【】\s]", "", regex=True)
-    s = s.str.replace("−", "-").str.replace("－", "-")
+    s = s.str.replace(r"[−－‐–]", "-", regex=True)
     return s.mask(s == "")
 
 
+def _rating_symbol(s: pd.Series) -> pd.Series:
+    """格付記号を取り出す（「AA-」「【AA－】」「AA-(安定的)」→ AA-）。"""
+    return _clean_label(s).str.upper().str.extract(_RATING_SYMBOL)[0]
+
+
+def _first_filled(df: pd.DataFrame, columns: list[str], read) -> pd.Series:
+    """行ごとに、columns の順で最初に読める値（read で変換して欠損でないもの）。"""
+    out = None
+    for c in columns:
+        v = read(df[c])
+        out = v if out is None else out.fillna(v)
+    return out
+
+
 def _date_number(s: pd.Series) -> pd.Series:
-    """公表日を YYYYMMDD の数にする（「2025/3/5」「2025-03-05 00:00:00」などに対応）。"""
-    p = s.astype("string").str.extract(r"(\d{4})\D(\d{1,2})\D(\d{1,2})").astype("float")
-    return p[0] * 10000 + p[1] * 100 + p[2]
+    """公表日を YYYYMMDD の数にする。読めなければ欠損。
+    「2025/3/5」「2025-03-05 00:00:00」「2025年3月5日」「20250305」、Excel の日付シリアル値（45721 など）に対応。"""
+    t = s.astype("string").str.normalize("NFKC").str.strip()
+    p = t.str.extract(r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})").astype("float")
+    out = p[0] * 10000 + p[1] * 100 + p[2]
+    q = t.str.extract(r"^(\d{4})(\d{2})(\d{2})$").astype("float")
+    out = out.fillna(q[0] * 10000 + q[1] * 100 + q[2])
+    serial = pd.to_numeric(t.where(t.str.fullmatch(r"\d{5}(?:\.\d+)?", na=False)), errors="coerce")
+    d = pd.to_datetime("1899-12-30") + pd.to_timedelta(serial.round(), unit="D")
+    return out.fillna((d.dt.year * 10000 + d.dt.month * 100 + d.dt.day).astype("float"))
 
 
 def add_change_columns(df: pd.DataFrame) -> pd.DataFrame:
     """発行体ごとに公表日順に並べ、1つ前のレポートと比べた「前回格付」「格付の変化」「方向性の変化」を加える。
 
-    - レポート = 発行体（ID、無ければコード・名前）＋公表日。同じレポートの文はすべて同じ値になる。
+    - レポート = 発行体（ID、空なら コード → 名前）＋公表日（公表日(業務)、空なら 公表日(CDEX)）。
+      同じレポートの文はすべて同じ値になる。
     - 格付の変化: 格付の順位（AAA→D）で比べて 引き上げ / 引き下げ / 据え置き。前のレポートが無い・格付が読めないときは 前回なし。
     - 方向性の変化: ポジティブ＞安定的＞ネガティブ で比べて 上向き / 下向き / 変化なし。
       どちらかがこの3つ以外（レーティング・モニターなど）で値が違えば その他の変更。
     - 比べるのは読み込んだデータの中だけ（前年分が無ければ 前回なし）。
     """
-    issuer = next((c for c in ISSUER_KEY_COLUMNS if c in df.columns), None)
-    date = next((c for c in DATE_COLUMNS if c in df.columns), None)
-    if issuer is None or date is None or RATING_COLUMN not in df.columns:
+    issuers = [c for c in ISSUER_KEY_COLUMNS if c in df.columns]
+    dates = [c for c in DATE_COLUMNS if c in df.columns]
+    if not issuers or not dates or RATING_COLUMN not in df.columns:
         return df
+
+    def text(s: pd.Series) -> pd.Series:
+        s = s.astype("string").str.strip()
+        return s.mask(s == "")
+
     w = pd.DataFrame({
-        "issuer": df[issuer].astype("string"),
-        "date": _date_number(df[date]),
-        "rating": _clean_label(df[RATING_COLUMN]),
+        "issuer": _first_filled(df, issuers, text),
+        "date": _first_filled(df, dates, _date_number),
+        "rating": _rating_symbol(df[RATING_COLUMN]),
         "outlook": _clean_label(df[OUTLOOK_COLUMN]) if OUTLOOK_COLUMN in df.columns else pd.NA,
     })
     ok = w["issuer"].notna() & w["date"].notna()
