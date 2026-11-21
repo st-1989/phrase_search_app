@@ -18,6 +18,7 @@ from server.merge import (
     OUTLOOK_CHANGE_COLUMN, OUTLOOK_CHANGE_ORDER, PREV_RATING_COLUMN, RATING_CHANGE_COLUMN, RATING_CHANGE_ORDER,
     SOURCE_COLUMN, add_change_columns, merge_tables,
 )
+from server.analysis import find_hits as find_analysis_hits
 
 
 st.set_page_config(page_title="Japanese Phrase Search", layout="wide")
@@ -865,6 +866,8 @@ def term_context_view(df: pd.DataFrame, units: Units, unit_ids: np.ndarray, toke
     for u in sel:
         rows = units.order[units.starts[u]: units.starts[u] + units.counts[u]]
         for pos in sorted(rows):
+            if not units.row_hit[pos]:
+                continue
             text = str(texts.iloc[pos])
             masked = mask_excluded(text, excl)
             spans = [sp for k in keys for sp in find_all_literal(masked, k)]
@@ -890,8 +893,32 @@ def term_context_view(df: pd.DataFrame, units: Units, unit_ids: np.ndarray, toke
     st.html("".join(cards))
 
 
-def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[str], excl: tuple = ()) -> None:
+def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[str], excl: tuple = (), dataset: str = "") -> None:
     texts = df[text_column]
+
+    if view == VIEW_TERMS:
+        root_mode = {MODE_AND_ROW: "row", MODE_AND_REPORT: "report", MODE_OR: "or"}.get(
+            st.session_state.get("search_mode"), "row")
+        root_key = json.dumps([dataset, queries, root_mode, excl], ensure_ascii=False)
+        state = st.session_state.get("term_exploration")
+        if not state or state["root_key"] != root_key:
+            state = {"root_key": root_key, "steps": [{"terms": list(queries), "mode": root_mode, "action": "検索語"}]}
+            st.session_state["term_exploration"] = state
+        steps = state["steps"]
+        step = steps[-1]
+        queries = step["terms"]
+        hit = find_analysis_hits(df, queries, step["mode"], excl)
+        st.caption("探索履歴: " + " → ".join(f'{i + 1}. {s["action"]}：{"・".join(s["terms"])}' for i, s in enumerate(steps)))
+        condition = "のすべてを同じ文に含む" if len(queries) > 1 and step["mode"] == "row" else "で検索"
+        st.caption("対象: " + "・".join(queries) + condition + "。共起語は検索条件に一致する文から抽出します。")
+        if len(steps) > 1:
+            back, reset = st.columns(2)
+            if back.button("1つ前に戻る", key="term_back"):
+                state["steps"] = steps[:-1]
+                st.rerun()
+            if reset.button("最初の検索語に戻る", key="term_reset"):
+                state["steps"] = steps[:1]
+                st.rerun()
 
     group_cols = [RATING_COLUMN]
     if view in (VIEW_COUNT, VIEW_GROUP_TERMS):
@@ -960,11 +987,21 @@ def analysis_view(view: str, df: pd.DataFrame, hit: np.ndarray, queries: list[st
             return
         event = st.dataframe(
             table, hide_index=True, width="stretch", column_config=TERM_COLUMN_CONFIG,
-            on_select="rerun", selection_mode="single-row", key="term_table",
+            on_select="rerun", selection_mode="single-row",
+            key=f"term_table_{hash((root_key, tuple(queries), step['mode'], tuple(table['語']), unit))}",
         )
-        st.caption("語の行をクリックすると、その語が実際に使われている文を表示します。")
+        st.caption("語の行をクリックすると、使用例と次の語を探す操作を表示します。")
         if event.selection.rows:
             term = table["語"].iloc[event.selection.rows[0]]
+            pivot, narrow = st.columns(2)
+            if pivot.button("この語を起点に探す", key="term_pivot",
+                            help="以前の検索語の条件を外し、この語と同じ文に現れる語を調べます。"):
+                steps.append({"terms": [term], "mode": "row", "action": "起点"})
+                st.rerun()
+            if narrow.button("現在の語との組み合わせで絞る", key="term_narrow",
+                             help="現在の検索語とこの語が、すべて同じ文にあるものに絞ります。"):
+                steps.append({"terms": list(dict.fromkeys([*queries, term])), "mode": "row", "action": "絞り込み"})
+                st.rerun()
             term_context_view(df, units, fg_units, fg, term, queries, unit_name, excl)
         return
 
@@ -1289,21 +1326,21 @@ def search_section(df: pd.DataFrame, dataset: str, user: str | None) -> None:
     if user and user_unchanged:
         record_search(user, terms[0], terms[1] if len(terms) == 2 else "", mode, dataset, total)
 
-    if total == 0:
-        st.markdown(f'<div class="search-meta">{html.escape(scope)}完全一致: 全 0 件</div>', unsafe_allow_html=True)
-        st.info("完全一致する句は見つかりませんでした。")
-        return
-
     view = st.radio(
         "表示", [VIEW_RESULTS, VIEW_COUNT, VIEW_TERMS, VIEW_GROUP_TERMS],
         horizontal=True, key="view", label_visibility="collapsed",
     )
+    if total == 0 and view != VIEW_TERMS:
+        st.markdown(f'<div class="search-meta">{html.escape(scope)}完全一致: 全 0 件</div>', unsafe_allow_html=True)
+        st.info("完全一致する句は見つかりませんでした。")
+        return
+
     if view != VIEW_RESULTS:
         st.markdown(
             f'<div class="search-meta">{html.escape(scope)}完全一致: 全 {total:,} 件 / {len(df):,} 行</div>',
             unsafe_allow_html=True,
         )
-        analysis_view(view, df, hit, terms, excl)
+        analysis_view(view, df, hit, terms, excl, dataset)
         return
 
     results = exact_search(

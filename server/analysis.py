@@ -111,20 +111,24 @@ def find_hits(df: pd.DataFrame, terms: list[str], mode: str, excl: tuple) -> np.
     for ph in sorted(excl, key=len, reverse=True):
         col = col.str.replace(ph, "\x00" * len(ph), regex=False)
     masks = [col.str.contains(t, regex=False, na=False).to_numpy() for t in terms]
+    if not masks:
+        return np.zeros(len(df), dtype=bool)
     if len(masks) == 1:
         return masks[0]
-    a, b = masks
+    any_hit = np.logical_or.reduce(masks)
     report_cols = report_key_columns(df)
     if mode == "or":
-        return a | b
+        return any_hit
     if mode == "row" or not report_cols:
-        return a & b
+        return np.logical_and.reduce(masks)
     rid = df.groupby(report_cols, sort=False, observed=True, dropna=False).ngroup().to_numpy()
-    n = int(rid.max()) + 1
-    has_a, has_b = np.zeros(n, bool), np.zeros(n, bool)
-    has_a[rid[a]] = True
-    has_b[rid[b]] = True
-    return (has_a & has_b)[rid] & (a | b)
+    n = int(rid.max()) + 1 if len(rid) else 0
+    has_all = np.ones(n, bool)
+    for mask in masks:
+        present = np.zeros(n, bool)
+        present[rid[mask]] = True
+        has_all &= present
+    return has_all[rid] & any_hit
 
 
 class Units:
@@ -301,6 +305,9 @@ class Analysis:
         rows: list[int] = []
         for u in sel:
             for pos in sorted(self.units.rows(u)):
+                # 絞り込んだ語がすべて同じ文にある、実際に集計した行だけを表示する。
+                if not self.units.row_hit[pos]:
+                    continue
                 text = str(self.texts.iloc[pos])
                 masked = text
                 for ph in self.excl:

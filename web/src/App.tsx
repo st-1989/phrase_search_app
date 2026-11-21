@@ -370,7 +370,7 @@ export default function App() {
           </div>
         )}
 
-        {showViews && hits!.length === 0 && !stale && (
+        {showViews && hits!.length === 0 && !stale && view !== "terms" && (
           <p className="empty">完全一致する句は見つかりませんでした。</p>
         )}
 
@@ -386,7 +386,7 @@ export default function App() {
         {showViews && hits!.length > 0 && view === "count" && (
           <CountView table={table!} mask={mask} hits={hits!} s={analysis} set={setA} fontSize={settings.fontSize} dim={stale} />
         )}
-        {showViews && hits!.length > 0 && view === "terms" && spec && (
+        {showViews && view === "terms" && spec && (
           <TermsView table={table!} spec={spec} s={analysis} set={setA} janome={janome}
             queries={d.terms} excl={d.exclList} context={settings.context} />
         )}

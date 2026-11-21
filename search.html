@@ -216,6 +216,37 @@ progress { width: 100%; height: 0.4rem; margin-top: 0.4rem; accent-color: var(--
 .recent-q { font-weight: 700; }
 .recent-meta { color: var(--muted); font-size: 0.8em; white-space: nowrap; }
 
+/* ---- ブラウザ内の共起語探索 ---- */
+.main.analysis-view { max-width: 1440px; }
+.view-tabs { display: flex; gap: 1rem; border-bottom: 1px solid var(--border); margin-top: 0.4rem; }
+.view-tabs button { padding: 0.5rem 0.3rem; color: var(--muted); border-bottom: 2px solid transparent; }
+.view-tabs button.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
+.terms-panel { flex: 1; min-height: 0; overflow: auto; padding: 0.8rem 0 2rem; }
+.term-controls, .term-trail, .term-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+.term-controls { font-size: 0.82em; margin-bottom: 0.6rem; }
+.term-controls label { display: flex; align-items: center; gap: 0.35rem; }
+.term-controls select, .term-controls input { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.2rem 0.4rem; }
+.term-controls input { width: 4.5em; }
+.term-trail .chip { padding: 0.2rem 0.65rem; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.term-caption { font-size: 0.82em; color: var(--muted); margin: 0.5rem 0; }
+.term-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; align-items: start; }
+.term-split.has-context { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); }
+.term-table-wrap { overflow: auto; max-height: 65vh; }
+.term-table { border-collapse: collapse; width: 100%; font-size: 0.83em; }
+.term-table th, .term-table td { padding: 0.4rem 0.55rem; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.term-table th { position: sticky; top: 0; background: var(--surface); }
+.term-table th:first-child, .term-table td:first-child { text-align: left; }
+.term-table button { color: var(--accent); font-weight: 700; text-align: left; }
+.term-table tr.selected { background: var(--accent-soft); }
+.term-context { border: 1px solid var(--border); border-radius: 10px; padding: 0.75rem; background: var(--surface); min-width: 0; }
+.term-context header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.term-actions { margin: 0.6rem 0; font-size: 0.82em; }
+.term-actions .chip { padding: 0.25rem 0.65rem; white-space: normal; }
+.term-examples { overflow: auto; max-height: 50vh; }
+.term-example { border-top: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.9em; }
+.term-example summary { cursor: pointer; }
+@media (max-width: 900px) { .term-split.has-context { grid-template-columns: minmax(0, 1fr); } }
+
 @media (max-width: 640px) {
   .main, .topbar { padding-left: 1rem; padding-right: 1rem; }
   .status .hint, .kbd-hint, .sub-help { display: none; }
@@ -296,6 +327,31 @@ progress { width: 100%; height: 0.4rem; margin-top: 0.4rem; accent-color: var(--
     </div>
     <progress id="progress" class="hidden"></progress>
     <div class="status" id="status" aria-live="polite"></div>
+
+    <nav class="view-tabs hidden" id="viewTabs" aria-label="表示">
+      <button data-view="results" class="on">検索結果</button>
+      <button data-view="terms">共起語</button>
+    </nav>
+    <section class="terms-panel hidden" id="termsPanel" aria-label="共起語の探索">
+      <div class="term-controls">
+        <label>単位 <select id="termUnit"><option value="report">レポート</option><option value="row">文</option></select></label>
+        <label>並び順 <select id="termRank"><option value="count">出現数</option><option value="lift">リフト</option></select></label>
+        <label>最小出現数 <input id="termMin" type="number" min="1" value="3"></label>
+        <label>表示語数 <input id="termTop" type="number" min="1" max="500" value="50"></label>
+      </div>
+      <p class="term-caption">同じ文にある語を抽出します。レポート単位では繰り返しを1件と数えます。語の切り出しは漢字・カタカナ・英字の連なりです。</p>
+      <nav class="term-trail" id="termTrail" aria-label="探索履歴"></nav>
+      <p class="term-caption" id="termCondition"></p>
+      <div class="term-actions" id="termHistoryActions" hidden>
+        <button class="link" id="termBack">1つ前に戻る</button>
+        <button class="link" id="termReset">最初の検索語に戻る</button>
+      </div>
+      <p class="term-caption" id="termSummary" role="status" aria-live="polite"></p>
+      <div class="term-split" id="termSplit">
+        <div class="term-table-wrap" id="termTable"></div>
+        <section class="term-context hidden" id="termContext" aria-label="選んだ語の使用例"></section>
+      </div>
+    </section>
 
     <div class="results hidden" id="results" tabindex="0" aria-label="検索結果"><div class="sizer" id="sizer"></div></div>
     <div id="recent"></div>
@@ -734,6 +790,10 @@ const S = {
   error: "",
   composing: false,
   chipUpdaters: [],
+  view: persistGet("ps.html.view", "results") === "terms" ? "terms" : "results",
+  termSettings: normalizeTermSettings(persistGet("ps.html.terms", {})),
+  datasetVersion: 0,
+  exploration: { rootKey: "", steps: [], selected: "", result: null, run: 0, contextLimit: 100 },
 };
 
 function ratingRank(v) {
@@ -1128,28 +1188,28 @@ function maskExcluded(text, excl) {
 const sortExcl = (excl) => excl.filter(Boolean).sort((a, b) => b.length - a.length);
 const effectiveMode = () => (S.mode === "report" && !(S.table && S.table.reportIds) ? "row" : S.mode);
 
-function findHits(terms, mode, excl) {
-  const t = S.table, n = t.n, mask = S.mask, text = t.text;
-  const a = new Uint8Array(n), b = new Uint8Array(n);
-  const two = terms.length === 2;
+function findHits(terms, mode, excl, t = S.table, mask = S.mask) {
+  const n = t.n, text = t.text;
+  if (!terms.length) return new Int32Array();
+  const masks = terms.map(() => new Uint8Array(n));
   for (let i = 0; i < n; i++) {
     if (mask && !mask[i]) continue;
     const s = excl.length ? maskExcluded(text[i], excl) : text[i];
-    if (s.indexOf(terms[0]) >= 0) a[i] = 1;
-    if (two && s.indexOf(terms[1]) >= 0) b[i] = 1;
+    for (let j = 0; j < terms.length; j++) if (s.includes(terms[j])) masks[j][i] = 1;
   }
   const out = [];
-  if (!two) {
-    for (let i = 0; i < n; i++) if (a[i]) out.push(i);
-  } else if (mode === "or") {
-    for (let i = 0; i < n; i++) if (a[i] || b[i]) out.push(i);
+  if (terms.length === 1 || mode === "or") {
+    for (let i = 0; i < n; i++) if (masks.some((a) => a[i])) out.push(i);
   } else if (mode === "row" || !t.reportIds) {
-    for (let i = 0; i < n; i++) if (a[i] && b[i]) out.push(i);
+    for (let i = 0; i < n; i++) if (masks.every((a) => a[i])) out.push(i);
   } else {
     const rid = t.reportIds;
-    const ha = new Uint8Array(t.nReports), hb = new Uint8Array(t.nReports);
-    for (let i = 0; i < n; i++) { if (a[i]) ha[rid[i]] = 1; if (b[i]) hb[rid[i]] = 1; }
-    for (let i = 0; i < n; i++) if ((a[i] || b[i]) && ha[rid[i]] && hb[rid[i]]) out.push(i);
+    const present = masks.map((a) => {
+      const flags = new Uint8Array(t.nReports);
+      for (let i = 0; i < n; i++) if (a[i]) flags[rid[i]] = 1;
+      return flags;
+    });
+    for (let i = 0; i < n; i++) if (masks.some((a) => a[i]) && present.every((a) => a[rid[i]])) out.push(i);
   }
   return Int32Array.from(out);
 }
@@ -1236,6 +1296,184 @@ function metaHtml(row) {
   const cls = "rating" + (moved ? (change === "引き上げ" ? " up" : " down") : "");
   const rest = [g(YEAR_COLUMN), g("公表日(CDEX)"), g("業種(業務)"), g("格付アクション(業務)"), g("担当アナリスト(CDEX)"), g(SOURCE_COLUMN)].filter(Boolean);
   return `<div class="meta"><span class="issuer">${esc(g("発行体名(CDEX)"))}</span>${rating ? `<span class="${cls}">${esc(rating)}</span>` : ""}<span class="meta-rest">${esc(rest.join(" · "))}</span></div>`;
+}
+
+/* =====================================================================
+ * 共起語（外部ライブラリ・通信なし。検索条件に一致する文から抽出）
+ * ===================================================================== */
+function termTokens(text, terms, excl) {
+  let value = maskExcluded(String(text), excl);
+  for (const term of [...terms].sort((a, b) => b.length - a.length)) value = value.split(term).join(" ");
+  return new Set(value.match(/[一-龥々〆]{2,}|[ァ-ヴー]{2,}|[A-Za-z][A-Za-z&/\-]+/g) || []);
+}
+
+function normalizeTermSettings(value) {
+  value = value && typeof value === "object" ? value : {};
+  const integer = (n, fallback, max) => Number.isFinite(Number(n)) ? Math.max(1, Math.min(max, Math.trunc(Number(n)))) : fallback;
+  return { unit: value.unit === "row" ? "row" : "report", rankBy: value.rankBy === "lift" ? "lift" : "count",
+    minCount: integer(value.minCount ?? 3, 3, Number.MAX_SAFE_INTEGER), topN: integer(value.topN ?? 50, 50, 500) };
+}
+
+/** UI に制御を返しながら集計し、条件が変わった古い集計は破棄する。 */
+async function analyzeTerms(t, mask, terms, mode, excl, settings, cancelled = () => false) {
+  const hits = findHits(terms, mode, excl, t, mask);
+  const hitMask = new Uint8Array(t.n);
+  for (const row of hits) hitMask[row] = 1;
+  const isReport = settings.unit === "report" && !!t.reportIds;
+  const units = new Map();
+  for (let i = 0; i < t.n; i++) {
+    if (!mask || mask[i]) {
+      const id = isReport ? t.reportIds[i] : i;
+      if (!units.has(id)) units.set(id, []);
+      units.get(id).push(i);
+    }
+    if (i % 5000 === 0) { await tick(); if (cancelled()) return null; }
+  }
+  const foreground = new Map(), background = new Map();
+  let nHit = 0, processed = 0;
+  for (const rows of units.values()) {
+    const fg = new Set(), bg = new Set();
+    let matched = false;
+    for (const row of rows) {
+      const tokens = termTokens(t.text[row], terms, excl);
+      for (const word of tokens) {
+        bg.add(word);
+        if (hitMask[row]) fg.add(word);
+      }
+      if (hitMask[row]) matched = true;
+      if (++processed % 2000 === 0) { await tick(); if (cancelled()) return null; }
+    }
+    for (const word of bg) background.set(word, (background.get(word) || 0) + 1);
+    for (const word of fg) foreground.set(word, (foreground.get(word) || 0) + 1);
+    if (matched) nHit++;
+  }
+  if (cancelled()) return null;
+  const candidates = [];
+  const rating = /^(?:AAA|AA|A|BBB|BB|B|CCC|CC|C|D)[+-]?$/;
+  for (const [word, docs] of foreground) {
+    if (docs < settings.minCount || rating.test(word) || terms.some((q) => word.includes(q) || q.includes(word))) continue;
+    const count = background.get(word) || 0;
+    const rate = docs / nHit;
+    candidates.push({ term: word, docs, rate, bg_rate: count / units.size, lift: rate / ((count + 0.5) / (units.size + 1)) });
+  }
+  candidates.sort((a, b) => (settings.rankBy === "lift" ? b.lift - a.lift || b.docs - a.docs : b.docs - a.docs || b.lift - a.lift)
+    || a.term.localeCompare(b.term, "ja"));
+  return { terms: candidates.slice(0, settings.topN), totalTerms: candidates.length, nUnits: units.size, nHit, hits, isReport };
+}
+
+function syncExploration() {
+  const rootKey = JSON.stringify([S.datasetVersion, S.terms, effectiveMode(), S.excl]);
+  const x = S.exploration;
+  if (x.rootKey !== rootKey) {
+    x.rootKey = rootKey;
+    x.steps = S.terms.length ? [{ terms: [...S.terms], mode: effectiveMode(), action: "検索語" }] : [];
+  }
+}
+
+function exploreTerm(word, action) {
+  const x = S.exploration, current = x.steps[x.steps.length - 1];
+  if (!current || !word) return;
+  x.steps.push({ terms: action === "pivot" ? [word] : [...new Set([...current.terms, word])], mode: "row",
+    action: action === "pivot" ? "起点" : "絞り込み" });
+  return renderTerms();
+}
+
+function goToTermStep(index) {
+  const x = S.exploration;
+  if (!Number.isInteger(index) || index < 0 || index >= x.steps.length) return;
+  x.steps = x.steps.slice(0, index + 1);
+  return renderTerms();
+}
+
+function renderTermTrail() {
+  const steps = S.exploration.steps, current = steps[steps.length - 1];
+  $("termTrail").innerHTML = steps.map((step, i) => `<button class="chip ${i === steps.length - 1 ? "active" : "ghost"}" data-step="${i}"${i === steps.length - 1 ? ' aria-current="step"' : ""}>${i + 1}. ${step.action}：${esc(step.terms.join("・"))}</button>`).join("");
+  const condition = current.terms.length === 1 ? "を含む文" : current.mode === "row" ? "のすべてを同じ文に含む"
+    : current.mode === "or" ? "のいずれかを含む文" : "のすべてを同じレポートに含む";
+  $("termCondition").textContent = `対象：${current.terms.join("・")}${condition}。格付・期間などは上部の絞り込みを適用します。`;
+  $("termHistoryActions").hidden = steps.length < 2;
+}
+
+async function renderTerms() {
+  const x = S.exploration, run = ++x.run;
+  x.selected = ""; x.result = null; x.contextLimit = 100;
+  $("termContext").classList.add("hidden");
+  $("termSplit").classList.remove("has-context");
+  $("termTable").innerHTML = "";
+  if (S.view !== "terms" || !S.table || !x.steps.length) return;
+  renderTermTrail();
+  const settings = S.termSettings;
+  const canReport = !!S.table.reportIds;
+  $("termUnit").querySelector('option[value="report"]').disabled = !canReport;
+  $("termUnit").value = canReport ? settings.unit : "row";
+  $("termRank").value = settings.rankBy;
+  $("termMin").value = settings.minCount;
+  $("termTop").value = settings.topN;
+  $("termSummary").textContent = "共起語を解析中…";
+  $("termsPanel").setAttribute("aria-busy", "true");
+  const current = x.steps[x.steps.length - 1];
+  try {
+    await tick();
+    if (run !== x.run) return;
+    const result = await analyzeTerms(S.table, S.mask, current.terms, current.mode, S.excl, { ...settings }, () => run !== x.run);
+    if (!result || run !== x.run) return;
+    x.result = result;
+    const name = result.isReport ? "レポート" : "文";
+    $("termSummary").textContent = `一致 ${fmt(result.nHit)} / 全 ${fmt(result.nUnits)} ${name}。${fmt(result.totalTerms)} 語中 ${fmt(result.terms.length)} 語を表示。語を選ぶと使用例と次の探索を表示します。`;
+    renderTermTable();
+  } catch (error) {
+    if (run === x.run) $("termSummary").textContent = "共起語の解析に失敗しました：" + (error.message || String(error));
+  } finally {
+    if (run === x.run) $("termsPanel").removeAttribute("aria-busy");
+  }
+}
+
+function renderTermTable() {
+  const x = S.exploration, result = x.result;
+  if (!result) return;
+  if (!result.terms.length) {
+    $("termTable").innerHTML = `<p class="term-caption">${result.nHit ? "条件に合う語がありません。最小出現数を下げてみてください。" : "現在の探索条件に一致する文がありません。前の段階に戻るか、絞り込みを変更してください。"}</p>`;
+    return;
+  }
+  const pct = (v) => (v * 100).toFixed(1) + "%";
+  $("termTable").innerHTML = `<table class="term-table"><thead><tr><th scope="col">語</th><th scope="col">出現件数</th><th scope="col">出現率</th><th scope="col">全体の出現率</th><th scope="col" title="出現率 ÷ 少数補正した全体の出現率">リフト</th></tr></thead><tbody>`
+    + result.terms.map((t, i) => `<tr${x.selected === t.term ? ' class="selected"' : ""}><td><button data-term="${i}" aria-pressed="${x.selected === t.term}">${esc(t.term)}</button></td><td>${fmt(t.docs)}</td><td>${pct(t.rate)}</td><td>${pct(t.bg_rate)}</td><td>${t.lift.toFixed(2)}</td></tr>`).join("") + "</tbody></table>";
+}
+
+function renderTermContext() {
+  const x = S.exploration, result = x.result, word = x.selected;
+  const box = $("termContext");
+  box.classList.toggle("hidden", !word || !result);
+  $("termSplit").classList.toggle("has-context", !!word && !!result);
+  if (!word || !result) return;
+  const current = x.steps[x.steps.length - 1], terms = [...current.terms, word];
+  const rows = sortHits(Int32Array.from(result.hits.filter((row) => maskExcluded(S.table.text[row], S.excl).includes(word))));
+  const reports = new Set();
+  if (result.isReport) for (const row of rows) reports.add(S.table.reportIds[row]);
+  const count = result.isReport ? reports.size : rows.length;
+  box.innerHTML = `<header><b>「${esc(word)}」の使用例</b><button class="icon-btn" data-close-context aria-label="使用例を閉じる">×</button></header>`
+    + '<div class="term-actions"><button class="chip" data-explore="pivot" title="以前の検索語を外し、この語を含む文を調べます">この語を起点に探す</button><button class="chip" data-explore="narrow" title="現在の語すべてと、この語が同じ文にあるものに絞ります">現在の語との組み合わせで絞る</button></div>'
+    + `<p class="term-caption">この語を含む ${fmt(count)} ${result.isReport ? "レポート" : "文"}・${fmt(rows.length)} 文。${fmt(Math.min(rows.length, x.contextLimit))} 文を表示。文章を開くと全文を表示します。</p><div class="term-examples">`
+    + Array.from(rows.slice(0, x.contextLimit), (row) => {
+      const text = S.table.text[row], spans = spansOf(text, terms, S.excl);
+      return `<details class="term-example"><summary>${metaHtml(row)}${snippetHtml(text, spans, S.settings.context, false)}</summary>${snippetHtml(text, spans, S.settings.context, true)}</details>`;
+    }).join("") + "</div>" + (rows.length > x.contextLimit ? '<button class="link" data-more-context>さらに100文を表示</button>' : "");
+}
+
+function renderView() {
+  const available = !!S.table && S.terms.length > 0;
+  const terms = available && S.view === "terms";
+  $("viewTabs").classList.toggle("hidden", !available);
+  $("termsPanel").classList.toggle("hidden", !terms);
+  document.querySelector("main").classList.toggle("analysis-view", terms);
+  $("results").classList.toggle("hidden", !available || terms || !S.hits.length);
+  for (const button of $("viewTabs").querySelectorAll("button")) button.classList.toggle("on", button.dataset.view === S.view);
+  if (terms) return renderTerms();
+  else {
+    S.exploration.run++;
+    $("termsPanel").removeAttribute("aria-busy");
+    if (available && S.hits.length) vReset(S.hits); else vReset(null);
+  }
 }
 
 /* =====================================================================
@@ -1406,9 +1644,10 @@ function renderStatus() {
   else {
     const m = MODES.find((x) => x.id === effectiveMode());
     const pill = S.terms.length === 2 && m ? `<span class="pill">${esc(m.label)}</span>` : "";
-    const hint = S.hits.length ? '<span class="spacer"></span><span class="hint"><kbd>↓</kbd> 結果へ <kbd>Enter</kbd> 全文 <kbd>Esc</kbd> 検索欄へ</span>' : "";
-    body = `<b class="num big">${fmt(S.hits.length)}</b><span class="muted"> 件 / ${fmt(S.pool)} 行</span>${pill}${hint}`
-      + (S.hits.length === 0 ? '<span class="muted"> — 完全一致する句は見つかりませんでした</span>' : "");
+    const hint = S.hits.length && S.view === "results" ? '<span class="spacer"></span><span class="hint"><kbd>↓</kbd> 結果へ <kbd>Enter</kbd> 全文 <kbd>Esc</kbd> 検索欄へ</span>' : "";
+    body = (S.view === "terms" ? '<span class="muted">検索欄の一致：</span>' : "")
+      + `<b class="num big">${fmt(S.hits.length)}</b><span class="muted"> 件 / ${fmt(S.pool)} 行</span>${pill}${hint}`
+      + (S.hits.length === 0 && S.view === "results" ? '<span class="muted"> — 完全一致する句は見つかりませんでした</span>' : "");
   }
   $("status").innerHTML = body;
 }
@@ -1466,9 +1705,8 @@ function refresh() {
   // 文の一覧の並び（年の新しい順 → 格付 → 業種）
   S.hits = S.terms.length ? sortHits(findHits(S.terms, effectiveMode(), S.excl)) : null;
   renderStatus();
-  const show = !!(S.hits && S.hits.length);
-  $("results").classList.toggle("hidden", !show);
-  if (show) vReset(S.hits); else vReset(null);
+  syncExploration();
+  renderView();
   renderRecent();
   scheduleRecord();
 }
@@ -1486,8 +1724,12 @@ function notice(kind, html) {
 /** S.files をつないで表を作り直す。extra はデータ名の横に出す補足。 */
 function setFiles(files, extra) {
   S.files = files;
+  S.datasetVersion++;
   if (!files.length) {
     S.table = null;
+    S.hits = null;
+    S.mask = null;
+    S.pool = 0;
     S.sources = [];
     $("dataLabel").textContent = "";
     $("fileList").classList.add("hidden");
@@ -1497,6 +1739,7 @@ function setFiles(files, extra) {
     $("recent").innerHTML = "";
     $("notices").innerHTML = "";
     $("dropzone").classList.remove("hidden");
+    renderView();
     renderStatus();
     return;
   }
@@ -1646,6 +1889,47 @@ function initUi() {
   $("fontSel").addEventListener("change", (e) => updateSettings({ font: e.target.value }, true));
   $("themeSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) updateSettings({ theme: b.dataset.theme }, false); });
 
+  // 共起語と段階的な探索（検索欄の語は変更せず、年・格付などの絞り込みを維持）
+  $("viewTabs").addEventListener("click", (e) => {
+    const button = e.target.closest("button[data-view]");
+    if (!button) return;
+    S.view = button.dataset.view;
+    persistSet("ps.html.view", S.view);
+    renderStatus();
+    renderView();
+  });
+  for (const id of ["termUnit", "termRank", "termMin", "termTop"]) {
+    $(id).addEventListener("change", () => {
+      S.termSettings = normalizeTermSettings({ unit: $("termUnit").value, rankBy: $("termRank").value,
+        minCount: $("termMin").value, topN: $("termTop").value });
+      persistSet("ps.html.terms", S.termSettings);
+      renderTerms();
+    });
+  }
+  $("termTrail").addEventListener("click", (e) => {
+    const button = e.target.closest("button[data-step]");
+    if (button) goToTermStep(Number(button.dataset.step));
+  });
+  $("termBack").addEventListener("click", () => goToTermStep(S.exploration.steps.length - 2));
+  $("termReset").addEventListener("click", () => goToTermStep(0));
+  $("termTable").addEventListener("click", (e) => {
+    const button = e.target.closest("button[data-term]"), result = S.exploration.result;
+    if (!button || !result) return;
+    const term = result.terms[Number(button.dataset.term)];
+    if (!term) return;
+    S.exploration.selected = term.term;
+    S.exploration.contextLimit = 100;
+    renderTermTable();
+    renderTermContext();
+  });
+  $("termContext").addEventListener("click", (e) => {
+    const button = e.target.closest("button");
+    if (!button) return;
+    if (button.dataset.explore) exploreTerm(S.exploration.selected, button.dataset.explore);
+    else if (button.hasAttribute("data-close-context")) { S.exploration.selected = ""; renderTermTable(); renderTermContext(); }
+    else if (button.hasAttribute("data-more-context")) { S.exploration.contextLimit += 100; renderTermContext(); }
+  });
+
   // 検索欄
   let timer = null;
   const schedule = () => { clearTimeout(timer); timer = setTimeout(refresh, 40); };
@@ -1659,7 +1943,7 @@ function initUi() {
     if (e.isComposing) return;
     if (e.key === "Escape") {
       if ($("q").value) { $("q").value = ""; refresh(); } else e.currentTarget.blur();
-    } else if (e.key === "ArrowDown" && S.hits && S.hits.length) {
+    } else if (e.key === "ArrowDown" && S.view === "results" && S.hits && S.hits.length) {
       e.preventDefault();
       V.focusFirst();
     }

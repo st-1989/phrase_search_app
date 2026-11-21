@@ -6,6 +6,7 @@ import { Control, Segmented, usePopover } from "../components/Popover";
 import { ResultList } from "../components/ResultList";
 import { UnitControl } from "./CountView";
 import type { AnalysisSettings } from "./settings";
+import { explorationKey, explorationRoot, explorationSpec, exploreFrom, type ExplorationAction, type ExplorationStep } from "../exploration";
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
@@ -14,21 +15,74 @@ function useServer<T>(spec: Spec | null, fn: (s: Spec, signal: AbortSignal) => P
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [settledKey, setSettledKey] = useState("");
   const key = spec ? JSON.stringify(spec) : "";
   useEffect(() => {
     if (!spec) return;
     const ctl = new AbortController();
     setLoading(true);
     setError("");
+    setSettledKey("");
     const timer = setTimeout(() => {
       fn(spec, ctl.signal)
-        .then((d) => { setData(d); setLoading(false); })
-        .catch((e) => { if (!ctl.signal.aborted) { setError(String(e.message ?? e)); setLoading(false); } });
+        .then((d) => {
+          if (!ctl.signal.aborted) { setData(d); setLoading(false); setSettledKey(key); }
+        })
+        .catch((e) => {
+          if (!ctl.signal.aborted) { setData(null); setError(String(e.message ?? e)); setLoading(false); setSettledKey(key); }
+        });
     }, 350);
     return () => { clearTimeout(timer); ctl.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  return { data, loading, error };
+  return {
+    data: settledKey === key ? data : null,
+    loading: !!spec && (loading || settledKey !== key),
+    error: settledKey === key ? error : "",
+  };
+}
+
+function useExploration(spec: Spec) {
+  const rootKey = explorationKey(spec);
+  const [state, setState] = useState<{ rootKey: string; steps: ExplorationStep[] }>({ rootKey, steps: [explorationRoot(spec)] });
+  useEffect(() => {
+    setState((previous) => previous.rootKey === rootKey ? previous : { rootKey, steps: [explorationRoot(spec)] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rootKey]);
+  const steps = state.rootKey === rootKey ? state.steps : [explorationRoot(spec)];
+  const current = steps[steps.length - 1];
+  const activeSpec = useMemo(() => explorationSpec(spec, current), [spec, current]);
+  const explore = (term: string, action: ExplorationAction) => {
+    setState({ rootKey, steps: [...steps, exploreFrom(current, term, action)] });
+  };
+  const goTo = (index: number) => setState({ rootKey, steps: steps.slice(0, index + 1) });
+  return { steps, activeSpec, explore, goTo };
+}
+
+function ExplorationTrail({ steps, goTo }: { steps: ExplorationStep[]; goTo: (index: number) => void }) {
+  const current = steps[steps.length - 1];
+  const condition = current.terms.length === 1 ? "を含む文"
+    : current.mode === "row" ? "のすべてを同じ文に含む"
+    : current.mode === "or" ? "のいずれかを含む文" : "のすべてを同じレポートに含む";
+  return (
+    <section className="exploration" aria-label="共起語の探索">
+      <nav className="exploration-trail" aria-label="探索履歴">
+        {steps.map((step, i) => (
+          <button key={i} className={"chip" + (i === steps.length - 1 ? " active" : " ghost")}
+            aria-current={i === steps.length - 1 ? "step" : undefined} onClick={() => goTo(i)}>
+            {i + 1}. {step.action === "root" ? "検索語" : step.action === "pivot" ? "起点" : "絞り込み"}：{step.terms.join("・")}
+          </button>
+        ))}
+      </nav>
+      <p className="caption" aria-live="polite">対象：<b>{current.terms.join("・")}</b>{condition}。共起語は検索条件に一致する文から抽出します。</p>
+      {steps.length > 1 && (
+        <div className="exploration-actions">
+          <button className="link" onClick={() => goTo(steps.length - 2)}>1つ前に戻る</button>
+          <button className="link" onClick={() => goTo(0)}>最初の検索語に戻る</button>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function TermControls({ s, set, janome, table }: {
@@ -89,9 +143,10 @@ function TermControls({ s, set, janome, table }: {
   );
 }
 
-function ContextPanel({ table, spec, term, group, queries, excl, context, onClose }: {
+function ContextPanel({ table, spec, term, group, queries, excl, context, onClose, onExplore }: {
   table: Table; spec: Spec; term: string; group: string | null; queries: string[]; excl: string[];
   context: number; onClose: () => void;
+  onExplore?: (term: string, action: ExplorationAction) => void;
 }) {
   const [res, setRes] = useState<{ n_units: number; rows: number[] } | null>(null);
   const [err, setErr] = useState("");
@@ -103,7 +158,7 @@ function ContextPanel({ table, spec, term, group, queries, excl, context, onClos
     return () => ctl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(spec), term, group]);
-  const hl = useMemo(() => [queries[0] ?? "", queries[1] ?? "", term], [queries, term]);
+  const hl = useMemo(() => [...queries, term], [queries, term]);
   const rows = useMemo(() => (res ? Int32Array.from(res.rows) : null), [res]);
   const unitName = spec.unit === "report" ? "レポート" : "文";
   return (
@@ -114,6 +169,14 @@ function ContextPanel({ table, spec, term, group, queries, excl, context, onClos
         </span>
         <button className="icon-btn" onClick={onClose} aria-label="閉じる">×</button>
       </header>
+      {onExplore && (
+        <div className="context-explore">
+          <button className="chip" onClick={() => onExplore(term, "pivot")}
+            title="以前の検索語の条件を外し、この語と同じ文に現れる語を調べます">この語を起点に探す</button>
+          <button className="chip" onClick={() => onExplore(term, "narrow")}
+            title="現在の検索語とこの語が、すべて同じ文にあるものに絞ります">現在の語との組み合わせで絞る</button>
+        </div>
+      )}
       {err && <p className="error">{err}</p>}
       {!res && !err && <p className="muted">読み込み中…</p>}
       {res && (
@@ -126,13 +189,14 @@ function ContextPanel({ table, spec, term, group, queries, excl, context, onClos
   );
 }
 
-export function TermsView({ table, spec, s, set, janome, queries, excl, context }: {
+export function TermsView({ table, spec, s, set, janome, excl, context }: {
   table: Table; spec: Spec; s: AnalysisSettings; set: (p: Partial<AnalysisSettings>) => void;
   janome: boolean; queries: string[]; excl: string[]; context: number;
 }) {
-  const { data, loading, error } = useServer<TermsResult>(spec, api.terms);
+  const { steps, activeSpec, explore, goTo } = useExploration(spec);
+  const { data, loading, error } = useServer<TermsResult>(activeSpec, api.terms);
   const [term, setTerm] = useState<string | null>(null);
-  const specKey = JSON.stringify(spec);
+  const specKey = JSON.stringify(activeSpec);
   const prev = useRef(specKey);
   useEffect(() => {
     if (prev.current !== specKey) setTerm(null);
@@ -147,24 +211,28 @@ export function TermsView({ table, spec, s, set, janome, queries, excl, context 
         <TermControls s={s} set={set} janome={janome} table={table} />
         {loading && <span className="spinner">解析中…</span>}
       </div>
+      <ExplorationTrail steps={steps} goTo={goTo} />
       {error && <p className="error">{error}</p>}
       {data && (
         <p className={"caption" + (loading ? " stale" : "")}>
           一致した{unitName} {data.n_fg.toLocaleString()} 件
           {data.n_fg < data.n_hit_units && `（全 ${data.n_hit_units.toLocaleString()} 件から抽出）`}を、
-          全{unitName} {data.n_bg.toLocaleString()} 件と比較。語をクリックすると使用例を表示します。
+          全{unitName} {data.n_bg.toLocaleString()} 件と比較。語をクリックすると使用例と、次の語を探す操作を表示します。
         </p>
       )}
       <div className={"split" + (term ? " has-side" : "")}>
         <div className={"table-scroll" + (loading ? " stale" : "")}>
-          {data && data.terms.length === 0 && <p className="empty">条件に合う語がありませんでした。最小出現数を下げてみてください。</p>}
+          {data && data.terms.length === 0 && <p className="empty">
+            {data.n_hit_units === 0 ? "現在の探索条件に一致する文がありません。前の段階に戻るか、絞り込みを変更してください。"
+              : "条件に合う語がありませんでした。最小出現数を下げてみてください。"}
+          </p>}
           {data && data.terms.length > 0 && (
             <TermTable rows={data.terms} selected={term} onPick={setTerm} maxRate={maxRate} />
           )}
         </div>
-        {term && (
-          <ContextPanel table={table} spec={spec} term={term} group={null} queries={queries} excl={excl}
-            context={context} onClose={() => setTerm(null)} />
+        {term && data && (
+          <ContextPanel key={specKey + term} table={table} spec={activeSpec} term={term} group={null} queries={activeSpec.terms} excl={excl}
+            context={context} onClose={() => setTerm(null)} onExplore={explore} />
         )}
       </div>
     </div>
@@ -267,7 +335,7 @@ export function GroupTermsView({ table, spec, s, set, janome, queries, excl, con
             </details>
           )}
           {pick && (
-            <ContextPanel table={table} spec={gspec} term={pick.term} group={pick.group} queries={queries} excl={excl}
+            <ContextPanel key={specKey + pick.group + pick.term} table={table} spec={gspec} term={pick.term} group={pick.group} queries={queries} excl={excl}
               context={context} onClose={() => setPick(null)} />
           )}
         </div>
